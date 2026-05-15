@@ -580,6 +580,117 @@ def get_latest_ultra_candidates(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Chart endpoints  (Phase 8C)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CHART_ALLOWED_TF   = {"1d", "1wk", "4h", "1h"}
+_CHART_MAX_BARS     = 500
+_CHART_DEFAULT_BARS = 150
+
+
+def _chart_sym(symbol: str) -> str | None:
+    import re
+    s = symbol.upper().strip()
+    if not re.match(r"^[A-Z]{1,5}(-[A-Z]{1,2})?$", s):
+        return None
+    return s
+
+
+@app.get("/api/chart/candles")
+def chart_candles(
+    symbol: str = Query(...),
+    tf:     str = Query(default="1d"),
+    bars:   int = Query(default=_CHART_DEFAULT_BARS, ge=10, le=_CHART_MAX_BARS),
+):
+    """
+    Return OHLCV candles with T/Z + WLNBB signal overlays.
+    Completed candles only — no partial current bar, no yfinance.
+    """
+    sym = _chart_sym(symbol)
+    if sym is None:
+        return JSONResponse(status_code=422, content={"error": "Invalid ticker symbol"})
+    if tf not in _CHART_ALLOWED_TF:
+        return JSONResponse(status_code=422,
+                            content={"error": f"tf must be one of {sorted(_CHART_ALLOWED_TF)}"})
+
+    from .chart_engine import get_chart_candles
+    result = get_chart_candles(sym, tf=tf, bars=bars)
+    if not result.get("ok"):
+        return JSONResponse(status_code=422, content=result)
+    return result
+
+
+@app.get("/api/chart/score")
+def chart_score(
+    symbol: str = Query(...),
+    tf:     str = Query(default="1d"),
+):
+    """
+    Return Ultra score panel for a single symbol (no candles).
+    """
+    sym = _chart_sym(symbol)
+    if sym is None:
+        return JSONResponse(status_code=422, content={"error": "Invalid ticker symbol"})
+    if tf not in _CHART_ALLOWED_TF:
+        return JSONResponse(status_code=422,
+                            content={"error": f"tf must be one of {sorted(_CHART_ALLOWED_TF)}"})
+
+    from .chart_engine import get_chart_score
+    result = get_chart_score(sym, tf=tf)
+    if not result.get("ok"):
+        return JSONResponse(status_code=422, content=result)
+    return result
+
+
+@app.get("/api/chart/snapshot")
+def chart_snapshot(
+    symbol: str = Query(...),
+    tf:     str = Query(default="1d"),
+    bars:   int = Query(default=_CHART_DEFAULT_BARS, ge=10, le=_CHART_MAX_BARS),
+):
+    """
+    Full chart snapshot: candles + markers + score panel + WLNBB summary.
+    Single Massive fetch shared across all computations.
+    """
+    sym = _chart_sym(symbol)
+    if sym is None:
+        return JSONResponse(status_code=422, content={"error": "Invalid ticker symbol"})
+    if tf not in _CHART_ALLOWED_TF:
+        return JSONResponse(status_code=422,
+                            content={"error": f"tf must be one of {sorted(_CHART_ALLOWED_TF)}"})
+
+    from .chart_engine import get_chart_snapshot
+    result = get_chart_snapshot(sym, tf=tf, bars=bars)
+    if not result.get("ok"):
+        return JSONResponse(status_code=422, content=result)
+    return result
+
+
+@app.get("/api/chart/signals")
+def chart_signals():
+    """
+    Stub — P1/P2 extended signal families not yet migrated.
+    Returns a list of what is and isn't implemented.
+    """
+    from .chart_engine import MISSING_GROUPS
+    return {
+        "implemented": [
+            "T/Z candlestick state machine (T1G-T12, Z1G-Z12, Z7)",
+            "WLNBB volume Bollinger bands (L1-L6, L34, L43, L64, L22)",
+            "FRI34 / FRI43 / FRI64 (BLUE + L-combo)",
+            "BLUE / UI indicators",
+            "CCI_READY / CCI_0_RETEST_OK / CCI_BLUE_TURN",
+            "BO_UP / BO_DN / BX_UP / BX_DN / BE_UP / BE_DN breakouts",
+            "PRE_PUMP (VSA pattern clustering)",
+            "FUCHSIA_RH / FUCHSIA_RL (RSI extremes)",
+            "Ultra score panel (real_ultra_score engine)",
+        ],
+        "missing_groups": MISSING_GROUPS,
+        "note": "Missing groups are scheduled for Phase 8C-P1 / Phase 8C-P2.",
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # One-time staging seeder  (Phase 3.5 — remove in Phase 4)
 # Protected by SEED_TOKEN env var. Never runs scans. Synthetic data only.
 # ─────────────────────────────────────────────────────────────────────────────
