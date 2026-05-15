@@ -261,6 +261,19 @@ def run_engines(
         _apply_routing(gog_df, ts, routing.get("gog_tier",  []), bar)
         _apply_routing(gog_df, ts, routing.get("gog_ctx",   []), bar)
 
+        # GOG_SCORE -> bar.scores (when available)
+        if gog_df is not None and ts in gog_df.index:
+            gog_row = gog_df.loc[ts]
+            gs = gog_row.get("GOG_SCORE")
+            if gs is not None and gs == gs:  # not NaN
+                bar["scores"]["score_reason"] = f"GOG_TIER={gog_row.get('GOG_TIER','')}"
+        # Tier-derived RTB phase + turbo_score alias
+        try:
+            from .chart_rtb_engine import fill_scores_from_bar
+            fill_scores_from_bar(bar)
+        except Exception as exc:
+            log.warning("rtb fill failed: %s", exc)
+
         bars.append(bar)
 
     return bars
