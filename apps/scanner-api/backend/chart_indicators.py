@@ -79,6 +79,80 @@ def atr(
 
 # ── Pattern helpers ───────────────────────────────────────────────────────────
 
+def macd(
+    close: pd.Series,
+    fast: int = 12,
+    slow: int = 26,
+    signal_period: int = 9,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Returns (macd_line, signal_line, histogram). Verbatim port from indicators.py."""
+    ema_f     = close.ewm(span=fast,          adjust=False).mean()
+    ema_s     = close.ewm(span=slow,          adjust=False).mean()
+    macd_line = ema_f - ema_s
+    macd_sig  = macd_line.ewm(span=signal_period, adjust=False).mean()
+    return macd_line, macd_sig, macd_line - macd_sig
+
+
+def psar(
+    high: np.ndarray,
+    low: np.ndarray,
+    af_start: float = 0.02,
+    af_step: float = 0.02,
+    af_max: float = 0.2,
+) -> np.ndarray:
+    """Parabolic SAR. Verbatim port from indicators.py."""
+    n    = len(high)
+    out  = np.empty(n, dtype=np.float64)
+    bull = True
+    af   = af_start
+    ep   = high[0]
+    out[0] = low[0]
+
+    for i in range(1, n):
+        if bull:
+            out[i] = out[i - 1] + af * (ep - out[i - 1])
+            out[i] = min(out[i], low[i - 1])
+            if i > 1:
+                out[i] = min(out[i], low[i - 2])
+            if low[i] < out[i]:
+                bull   = False
+                out[i] = ep
+                ep     = low[i]
+                af     = af_start
+            else:
+                if high[i] > ep:
+                    ep = high[i]
+                    af = min(af + af_step, af_max)
+        else:
+            out[i] = out[i - 1] + af * (ep - out[i - 1])
+            out[i] = max(out[i], high[i - 1])
+            if i > 1:
+                out[i] = max(out[i], high[i - 2])
+            if high[i] > out[i]:
+                bull   = True
+                out[i] = ep
+                ep     = high[i]
+                af     = af_start
+            else:
+                if low[i] < ep:
+                    ep = low[i]
+                    af = min(af + af_step, af_max)
+    return out
+
+
+def apply_cooldown(series: pd.Series, n: int) -> pd.Series:
+    """Suppress signals within n bars of each fire. Verbatim port from indicators.py."""
+    arr  = series.to_numpy(dtype=bool, copy=True)
+    last = -(n + 1)
+    for i in range(len(arr)):
+        if arr[i]:
+            if i - last < n:
+                arr[i] = False
+            else:
+                last = i
+    return pd.Series(arr, index=series.index)
+
+
 def crossover(a: pd.Series, level: float) -> pd.Series:
     return (a > level) & (a.shift(1) <= level)
 

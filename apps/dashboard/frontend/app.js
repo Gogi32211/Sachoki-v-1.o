@@ -858,6 +858,7 @@ async function loadChartHistory() {
     return;
   }
 
+  _lastHistoryData = data;
   if (histArea) {
     histArea.style.display = "";
     histArea.innerHTML = _buildHistoryTimeline(data);
@@ -894,8 +895,16 @@ function _numCls(key, val) {
   return "tl-num";
 }
 
+let _tlHideEmpty    = true;   // hide signal rows that have no badges across all bars
+let _lastHistoryData = null;  // cached response for toggle re-render
+
+function _tlRowHasData(row, bars) {
+  if (row.type !== "sig") return true;  // always show sep/num rows
+  return bars.some(bar => (bar.signals?.[row.key] ?? []).length > 0);
+}
+
 function _buildHistoryTimeline(data) {
-  const bars = data.bars ?? [];
+  const bars   = data.bars ?? [];
   const ticker = data.ticker ?? "";
   const tf     = data.timeframe ?? "1d";
   const genAt  = data.meta?.generated_at ?? "";
@@ -905,6 +914,8 @@ function _buildHistoryTimeline(data) {
   ).join("");
 
   const tableRows = _TL_ROWS.map(row => {
+    if (_tlHideEmpty && !_tlRowHasData(row, bars)) return "";
+
     if (row.type === "sep") {
       const emptyCells = bars.map(() => `<td class="tl-sep-cell"></td>`).join("");
       return `<tr class="tl-sep-row"><th class="tl-row-label tl-sep-cell"></th>${emptyCells}</tr>`;
@@ -934,10 +945,15 @@ function _buildHistoryTimeline(data) {
     return "";
   }).join("");
 
+  const hiddenToggleLabel = _tlHideEmpty ? "Show all rows" : "Hide empty rows";
+
   return `
     <div class="timeline-header">
       <span>${esc(ticker)} · ${esc(tf)} · ${bars.length} bars</span>
-      <span class="timeline-meta">${esc(genAt.slice(0, 16).replace("T", " ") + " UTC")}</span>
+      <div style="display:flex;gap:10px;align-items:center">
+        <button class="btn-tl-toggle" onclick="_tlToggleEmpty(this)">${hiddenToggleLabel}</button>
+        <span class="timeline-meta">${esc(genAt.slice(0, 16).replace("T", " ") + " UTC")}</span>
+      </div>
     </div>
     <div class="timeline-wrap">
       <table class="timeline-table">
@@ -950,6 +966,15 @@ function _buildHistoryTimeline(data) {
         <tbody>${tableRows}</tbody>
       </table>
     </div>`;
+}
+
+function _tlToggleEmpty(btn) {
+  _tlHideEmpty = !_tlHideEmpty;
+  btn.textContent = _tlHideEmpty ? "Show all rows" : "Hide empty rows";
+  const histArea = $("chartHistoryArea");
+  if (histArea && _lastHistoryData) {
+    histArea.innerHTML = _buildHistoryTimeline(_lastHistoryData);
+  }
 }
 
 function _renderLwChart(candles, markers) {

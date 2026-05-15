@@ -420,6 +420,13 @@ tbody tr:last-child { border-bottom: none; }
   padding: 8px 0; font-size: .78rem; color: var(--text2);
 }
 .timeline-meta { font-size: .65rem; color: var(--text-dim); font-family: monospace; }
+.btn-tl-toggle {
+  font-size: .7rem; padding: 3px 10px;
+  background: var(--surface2); color: var(--text2);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer; transition: background .15s;
+}
+.btn-tl-toggle:hover { background: var(--border); }
 .timeline-wrap {
   overflow-x: auto; border: 1px solid var(--border);
   border-radius: var(--radius); background: var(--surface);

@@ -16,6 +16,9 @@ import pandas as pd
 from .scan_engine import fetch_bars
 from .chart_signal_engine import compute_signals as _compute_tz
 from .chart_wlnbb_engine import compute_wlnbb as _compute_wlnbb
+from .chart_vabs_engine import compute_vabs as _compute_vabs, VABS_SIG_COLS
+from .chart_wick_engine import compute_wick as _compute_wick, WICK_SIG_COLS
+from .chart_combo_engine import compute_combo as _compute_combo, COMBO_SIG_COLS, COMBO_PREUP_COLS
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +78,16 @@ _F_DISPLAY: frozenset[str] = frozenset({"F↑", "F↓"})
 _CTX_DISPLAY: frozenset[str] = frozenset({"CCI✓", "CCIR", "CCIB"})
 # PRE_PUMP → VOL row
 _VOL_EXTRA: frozenset[str] = frozenset({"PP"})
+# VABS display labels (from chart_vabs_engine) → vabs row
+_VABS_DISPLAY: frozenset[str] = frozenset({lbl for _, lbl in VABS_SIG_COLS})
+# WICK display labels → wick row
+_WICK_DISPLAY: frozenset[str] = frozenset({lbl for _, lbl in WICK_SIG_COLS})
+# PREUP labels (from combo engine) → z row (same as old SuperchartPanel)
+_PREUP_DISPLAY: frozenset[str] = frozenset({"P2", "P3", "P50", "P89"})
+# Combo/I labels → i row
+_I_DISPLAY: frozenset[str] = frozenset({
+    lbl for col, lbl in COMBO_SIG_COLS if col not in COMBO_PREUP_COLS
+})
 
 
 def _group_signals(signals: list[str], vol_bucket: str) -> dict[str, list[str]]:
@@ -93,7 +106,7 @@ def _group_signals(signals: list[str], vol_bucket: str) -> dict[str, list[str]]:
         groups["vol"].append(vol_bucket)
 
     for sig in signals:
-        if sig.startswith("Z"):
+        if sig.startswith("Z") or sig in _PREUP_DISPLAY:
             groups["z"].append(sig)
         elif sig.startswith("T"):
             groups["t"].append(sig)
@@ -105,10 +118,35 @@ def _group_signals(signals: list[str], vol_bucket: str) -> dict[str, list[str]]:
             groups["ctx"].append(sig)
         elif sig in _VOL_EXTRA:
             groups["vol"].append(sig)
+        elif sig in _VABS_DISPLAY:
+            groups["vabs"].append(sig)
+        elif sig in _WICK_DISPLAY:
+            groups["wick"].append(sig)
+        elif sig in _I_DISPLAY:
+            groups["i"].append(sig)
         else:
             groups["ctx"].append(sig)  # safe fallback
 
     return groups
+
+
+def _active_extra_signals(
+    vabs_row: pd.Series,
+    wick_row: pd.Series,
+    combo_row: pd.Series,
+) -> list[str]:
+    """Collect VABS / WICK / combo signal labels for a single bar."""
+    sigs: list[str] = []
+    for col, label in VABS_SIG_COLS:
+        if vabs_row.get(col, False):
+            sigs.append(label)
+    for col, label in WICK_SIG_COLS:
+        if wick_row.get(col, False):
+            sigs.append(label)
+    for col, label in COMBO_SIG_COLS:
+        if combo_row.get(col, False):
+            sigs.append(label)
+    return sigs
 
 
 def _fetch_for_chart(symbol: str, tf: str, bars: int) -> pd.DataFrame | None:
@@ -314,10 +352,10 @@ def get_chart_history(symbol: str, tf: str = "1d", lookback: int = 60) -> dict:
         }
 
     try:
-        tz_df = _compute_tz(df)
-        wl_df = _compute_wlnbb(df)
+        tz_df   = _compute_tz(df)
+        wl_df   = _compute_wlnbb(df)
     except Exception as exc:
-        log.warning("History signal compute error for %s: %s", sym, exc)
+        log.warning("History TZ/WLNBB compute error for %s: %s", sym, exc)
         return {
             "ok": False, "ticker": sym, "timeframe": tf, "lookback": bars,
             "bars": [],
@@ -325,18 +363,42 @@ def get_chart_history(symbol: str, tf: str = "1d", lookback: int = 60) -> dict:
                      "warning": "signal computation failed"},
         }
 
+    # Phase 8F-A: compute extra engines defensively — failures degrade gracefully
+    try:
+        vabs_df = _compute_vabs(df)
+    except Exception as exc:
+        log.warning("History VABS compute error for %s: %s", sym, exc)
+        vabs_df = pd.DataFrame(index=df.index)
+
+    try:
+        wick_df = _compute_wick(df)
+    except Exception as exc:
+        log.warning("History WICK compute error for %s: %s", sym, exc)
+        wick_df = pd.DataFrame(index=df.index)
+
+    try:
+        combo_df = _compute_combo(df)
+    except Exception as exc:
+        log.warning("History COMBO compute error for %s: %s", sym, exc)
+        combo_df = pd.DataFrame(index=df.index)
+
     combined = pd.concat([df, tz_df, wl_df], axis=1)
     combined = combined.iloc[-bars:] if len(combined) > bars else combined
 
     out_bars: list[dict] = []
     for ts, row in combined.iterrows():
         date_str = _ts_to_date(ts)
-        tz_row = tz_df.loc[ts] if ts in tz_df.index else pd.Series(dtype=object)
-        wl_row = wl_df.loc[ts] if ts in wl_df.index else pd.Series(dtype=object)
+        tz_row    = tz_df.loc[ts]    if ts in tz_df.index    else pd.Series(dtype=object)
+        wl_row    = wl_df.loc[ts]    if ts in wl_df.index    else pd.Series(dtype=object)
+        vabs_row  = vabs_df.loc[ts]  if ts in vabs_df.index  else pd.Series(dtype=object)
+        wick_row  = wick_df.loc[ts]  if ts in wick_df.index  else pd.Series(dtype=object)
+        combo_row = combo_df.loc[ts] if ts in combo_df.index else pd.Series(dtype=object)
 
         sigs       = _active_signals(tz_row, wl_row)
+        extra_sigs = _active_extra_signals(vabs_row, wick_row, combo_row)
+        all_sigs   = sigs + extra_sigs
         vol_bucket = str(wl_row.get("vol_bucket", row.get("vol_bucket", "")))
-        groups     = _group_signals(sigs, vol_bucket)
+        groups     = _group_signals(all_sigs, vol_bucket)
 
         close_val = float(row["close"]) if not pd.isna(row["close"]) else None
         rsi_val   = float(wl_row.get("rsi", row.get("rsi", None)) or 0) or None
