@@ -1,8 +1,10 @@
 """
-scanner-api — Phase 3: read-only Ultra Scan DB integration.
+scanner-api — Phase 5A: controlled manual Ultra scan execution.
 
-All endpoints are read-only except /api/admin/seed (one-time staging seeder,
-protected by SEED_TOKEN env var, to be removed in Phase 4).
+Adds POST /api/scans/ultra/run for a small controlled symbol list (max 20).
+All read endpoints from Phase 3 are preserved unchanged.
+Scheduler remains disabled. Full-market scan remains disabled.
+score_engine: temporary_phase_5A
 """
 from __future__ import annotations
 
@@ -10,24 +12,72 @@ import json
 import logging
 import os
 import secrets
+import threading
+from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, field_validator
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "info").upper())
 
-app = FastAPI(title="scanner-api", version="0.2.0")
+app = FastAPI(title="scanner-api", version="0.5.0")
 
-_VERSION = "0.2.0"
-_PHASE = "3-readonly-db"
+_VERSION = "0.5.0"
+_PHASE   = "5A-controlled-scan"
 
 # Known Ultra Scan table names (confirmed from backend/ultra_scan_migration.py)
-_RUN_TABLE = "ultra_scan_runs"
+_RUN_TABLE  = "ultra_scan_runs"
 _CAND_TABLE = "ultra_scan_candidates"
 
 # Safe columns for ORDER BY — never interpolate arbitrary user input
 _SAFE_SORT_COLS = {"ultra_score", "ticker", "created_at"}
+
+# ── Controlled scan config ────────────────────────────────────────────────────
+_MAX_SYMBOLS       = 20
+_ALLOWED_TIMEFRAMES = ["1d"]
+_SCHEDULER_ENABLED = False
+
+from .scan_engine import DEFAULT_SYMBOLS as _DEFAULT_SYMBOLS  # noqa: E402
+
+# ── Scan state (in-process, single worker) ────────────────────────────────────
+_scan_lock  = threading.Lock()
+_scan_state: dict[str, Any] = {
+    "running":         False,
+    "run_id":          None,
+    "latest_status":   None,
+    "last_started_at": None,
+    "last_finished_at":None,
+    "symbols_scanned": 0,
+    "candidates_saved":0,
+    "total_symbols":   0,
+    "current_symbol":  None,
+    "error":           None,
+}
+
+
+class ScanRequest(BaseModel):
+    symbols:         list[str] = _DEFAULT_SYMBOLS
+    timeframe:       str       = "1d"
+    universe:        str       = "manual_test"
+    scan_mode:       str       = "controlled_test"
+    replace_latest:  bool      = True
+
+    @field_validator("symbols")
+    @classmethod
+    def check_symbol_count(cls, v: list[str]) -> list[str]:
+        if len(v) > _MAX_SYMBOLS:
+            raise ValueError(f"Phase 5A controlled scan allows max {_MAX_SYMBOLS} symbols.")
+        return [s.upper().strip() for s in v if s.strip()]
+
+    @field_validator("timeframe")
+    @classmethod
+    def check_timeframe(cls, v: str) -> str:
+        if v not in _ALLOWED_TIMEFRAMES:
+            raise ValueError(f"Allowed timeframes: {_ALLOWED_TIMEFRAMES}")
+        return v
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -170,18 +220,21 @@ def debug_status():
             log.warning("debug/status DB probe: %s", exc)
 
     return {
-        "service":                      "scanner-api",
-        "mode":                         "read_only_db_phase",
-        "database_configured":          db_configured,
-        "database_connected":           db_connected,
-        "database_error":               db_error or None,
-        "redis_configured":             bool(os.getenv("REDIS_URL")),
-        "massive_configured":           bool(os.getenv("MASSIVE_API_KEY")),
-        "scanning_enabled":             False,
-        "scheduler_enabled":            False,
-        "latest_ultra_scan_found":      latest_scan_found,
-        "latest_ultra_scan_id":         latest_scan_id,
-        "latest_ultra_candidate_count": latest_candidate_count,
+        "service":                        "scanner-api",
+        "mode":                           "controlled_scan_phase",
+        "database_configured":            db_configured,
+        "database_connected":             db_connected,
+        "database_error":                 db_error or None,
+        "redis_configured":               bool(os.getenv("REDIS_URL")),
+        "massive_configured":             bool(os.getenv("MASSIVE_API_KEY")),
+        "scan_execution_available":       True,
+        "controlled_scan_max_symbols":    _MAX_SYMBOLS,
+        "scanning_enabled":               False,
+        "scheduler_enabled":              _SCHEDULER_ENABLED,
+        "full_market_scan_enabled":       False,
+        "latest_ultra_scan_found":        latest_scan_found,
+        "latest_ultra_scan_id":           latest_scan_id,
+        "latest_ultra_candidate_count":   latest_candidate_count,
     }
 
 
@@ -496,6 +549,249 @@ def _synthetic_row(i: int, ticker: str) -> dict:
                           "has_tz_intel": rng.random()<0.5},
     }
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Controlled scan endpoints (Phase 5A)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _persist_scan_results(scan_result: dict, replace_latest: bool) -> int:
+    """
+    Write a completed scan to DB. Returns new run_id.
+    Safe latest replacement: old latest is only flipped after new run succeeds.
+    """
+    from . import db as _db
+    import psycopg2.extras
+
+    universe  = scan_result["universe"]
+    timeframe = scan_result["timeframe"]
+    scan_mode = scan_result["scan_mode"]
+    started   = scan_result["started_at"]
+    finished  = datetime.now(timezone.utc).isoformat()
+    candidates = scan_result["results"]
+    errors    = scan_result["errors"]
+    warnings  = [f"{e['symbol']}: {e['error']}" for e in errors]
+
+    meta = {
+        "score_engine":      scan_result["score_engine"],
+        "elapsed_ms":        scan_result["elapsed_ms"],
+        "symbols_requested": scan_result["symbols_requested"],
+        "phase":             _PHASE,
+    }
+
+    with _db.get_write_conn() as conn:
+        with conn.cursor(cursor_factory=__import__("psycopg2").extras.RealDictCursor) as cur:
+
+            # 1 — create run row (not latest yet)
+            cur.execute(
+                f"""
+                INSERT INTO {_RUN_TABLE}
+                  (universe, tf, nasdaq_batch, status, is_latest,
+                   total_candidates, sources_json, warnings_json, meta_json,
+                   started_at, finished_at)
+                VALUES (%s,%s,%s,'completed',FALSE,%s,%s,%s,%s,%s,%s)
+                RETURNING id
+                """,
+                (
+                    universe, timeframe, scan_mode,
+                    len(candidates),
+                    json.dumps({"source": "scanner-api-controlled-scan"}),
+                    json.dumps(warnings),
+                    json.dumps(meta),
+                    started, finished,
+                ),
+            )
+            run_id = cur.fetchone()["id"]
+
+            # 2 — insert candidates
+            if candidates:
+                rows = [
+                    (run_id, c["symbol"], float(c["ultra_score"]), json.dumps(c))
+                    for c in candidates
+                ]
+                psycopg2.extras.execute_batch(
+                    cur,
+                    f"INSERT INTO {_CAND_TABLE} (scan_run_id, ticker, ultra_score, row_json) "
+                    "VALUES (%s,%s,%s,%s)",
+                    rows, page_size=50,
+                )
+
+            # 3 — safe latest flip (only after candidates written)
+            if replace_latest:
+                cur.execute(
+                    f"UPDATE {_RUN_TABLE} SET is_latest=FALSE "
+                    "WHERE universe=%s AND tf=%s AND is_latest=TRUE AND id<>%s",
+                    (universe, timeframe, run_id),
+                )
+                cur.execute(
+                    f"UPDATE {_RUN_TABLE} SET is_latest=TRUE WHERE id=%s",
+                    (run_id,),
+                )
+
+        conn.commit()
+
+    return run_id
+
+
+@app.post("/api/scans/ultra/run")
+def run_ultra_scan(req: ScanRequest):
+    """
+    Trigger a small controlled Ultra scan. Max 20 symbols. Synchronous.
+    Writes results to DB and marks as latest if replace_latest=true.
+    """
+    global _scan_state
+
+    if not _scan_lock.acquire(blocking=False):
+        return JSONResponse(
+            status_code=409,
+            content={"accepted": False, "error": "A scan is already running. Try again shortly."},
+        )
+
+    try:
+        from . import db as _db
+        from .scan_engine import run_controlled_scan
+
+        if not _db.DATABASE_URL:
+            return JSONResponse(
+                status_code=503,
+                content={"accepted": False, "error": "DATABASE_URL not configured"},
+            )
+
+        symbols = req.symbols or _DEFAULT_SYMBOLS
+
+        # Update in-process state
+        _scan_state.update({
+            "running": True, "run_id": None, "error": None,
+            "total_symbols": len(symbols), "symbols_scanned": 0,
+            "candidates_saved": 0, "current_symbol": symbols[0] if symbols else None,
+            "last_started_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+        log.info("Phase 5A controlled scan: %d symbols, tf=%s universe=%s",
+                 len(symbols), req.timeframe, req.universe)
+
+        scan_result = run_controlled_scan(
+            symbols=symbols,
+            timeframe=req.timeframe,
+            universe=req.universe,
+            scan_mode=req.scan_mode,
+        )
+
+        _scan_state["symbols_scanned"] = scan_result["symbols_scanned"]
+        _scan_state["candidates_saved"] = scan_result["candidates_saved"]
+        _scan_state["current_symbol"] = None
+
+        run_id = _persist_scan_results(scan_result, req.replace_latest)
+
+        finished = datetime.now(timezone.utc).isoformat()
+        _scan_state.update({
+            "running": False, "run_id": run_id,
+            "latest_status": "completed",
+            "last_finished_at": finished,
+            "error": None,
+        })
+
+        log.info("Phase 5A scan complete: run_id=%d candidates=%d errors=%d",
+                 run_id, scan_result["symbols_scanned"], len(scan_result["errors"]))
+
+        return {
+            "accepted":          True,
+            "run_id":            run_id,
+            "status":            "completed",
+            "symbols_requested": scan_result["symbols_requested"],
+            "symbols_scanned":   scan_result["symbols_scanned"],
+            "candidates_saved":  scan_result["candidates_saved"],
+            "errors":            scan_result["errors"],
+            "elapsed_ms":        scan_result["elapsed_ms"],
+            "score_engine":      scan_result["score_engine"],
+            "message":           "Controlled Ultra scan completed.",
+        }
+
+    except ValueError as exc:
+        _scan_state.update({"running": False, "error": str(exc)})
+        return JSONResponse(status_code=400, content={"accepted": False, "error": str(exc)})
+    except Exception as exc:
+        log.exception("run_ultra_scan error")
+        _scan_state.update({"running": False, "error": type(exc).__name__,
+                            "latest_status": "failed"})
+        return JSONResponse(status_code=500,
+                            content={"accepted": False, "error": type(exc).__name__})
+    finally:
+        _scan_lock.release()
+
+
+@app.get("/api/scans/ultra/status")
+def ultra_scan_status():
+    """Return current or last scan execution state."""
+    from . import db as _db
+
+    # Pull latest run info from DB as source of truth
+    latest_run_id      = None
+    latest_run_status  = None
+    latest_finished    = None
+    latest_total_cands = 0
+
+    if _db.DATABASE_URL:
+        try:
+            with _db.get_conn() as cur:
+                cur.execute(
+                    f"SELECT id, status, finished_at, total_candidates "
+                    f"FROM {_RUN_TABLE} ORDER BY id DESC LIMIT 1"
+                )
+                row = cur.fetchone()
+                if row:
+                    latest_run_id      = row["id"]
+                    latest_run_status  = row["status"]
+                    latest_finished    = str(row["finished_at"]) if row["finished_at"] else None
+                    latest_total_cands = row["total_candidates"] or 0
+        except Exception:
+            pass
+
+    state = dict(_scan_state)  # snapshot
+
+    if state["running"]:
+        return {
+            "running":        True,
+            "run_id":         state["run_id"],
+            "symbols_scanned":state["symbols_scanned"],
+            "total_symbols":  state["total_symbols"],
+            "current_symbol": state["current_symbol"],
+            "last_started_at":state["last_started_at"],
+        }
+
+    return {
+        "running":           False,
+        "latest_run_id":     latest_run_id,
+        "latest_status":     latest_run_status,
+        "last_started_at":   state["last_started_at"],
+        "last_finished_at":  latest_finished,
+        "symbols_scanned":   state["symbols_scanned"],
+        "candidates_saved":  latest_total_cands,
+        "error":             state["error"],
+    }
+
+
+@app.get("/api/debug/scan-config")
+def debug_scan_config():
+    return {
+        "phase":                    _PHASE,
+        "max_symbols":              _MAX_SYMBOLS,
+        "allowed_timeframes":       _ALLOWED_TIMEFRAMES,
+        "default_symbols":          _DEFAULT_SYMBOLS,
+        "scheduler_enabled":        _SCHEDULER_ENABLED,
+        "full_market_scan_enabled": False,
+        "score_engine":             "temporary_phase_5A",
+        "notes": [
+            "Phase 5A: controlled manual scan only.",
+            "Max 20 symbols per request.",
+            "Scores are temporary_phase_5A — not production Ultra scores.",
+            "Scheduler remains disabled.",
+        ],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Staging seeder (Phase 3.5, remove in Phase 6)
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/api/admin/seed")
 def admin_seed(x_seed_token: str = Header(default="")):

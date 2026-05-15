@@ -75,3 +75,25 @@ def table_exists(name: str) -> bool:
             (name,),
         )
         return cur.fetchone() is not None
+
+
+@contextmanager
+def get_write_conn() -> Generator:
+    """
+    Yield a writable psycopg2 connection (autocommit=False).
+    Caller must explicitly commit or rollback. Used only by scan execution.
+    Raises RuntimeError if DATABASE_URL is not set.
+    """
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL not configured")
+    import psycopg2
+    import psycopg2.extras
+    conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
+    conn.autocommit = False
+    try:
+        yield conn
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
