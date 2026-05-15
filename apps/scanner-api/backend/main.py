@@ -666,6 +666,35 @@ def chart_snapshot(
     return result
 
 
+_CHART_MAX_LOOKBACK     = 120
+_CHART_DEFAULT_LOOKBACK = 60
+
+
+@app.get("/api/chart/history")
+def chart_history(
+    symbol:   str = Query(...),
+    tf:       str = Query(default="1d"),
+    lookback: int = Query(default=_CHART_DEFAULT_LOOKBACK, ge=10, le=_CHART_MAX_LOOKBACK),
+):
+    """
+    Historical per-bar signal timeline for Super Chart History view.
+    Returns last `lookback` bars with T/Z + WLNBB signals grouped into rows.
+    No scoring per bar. No yfinance.
+    """
+    sym = _chart_sym(symbol)
+    if sym is None:
+        return JSONResponse(status_code=422, content={"error": "Invalid ticker symbol"})
+    if tf not in _CHART_ALLOWED_TF:
+        return JSONResponse(status_code=422,
+                            content={"error": f"tf must be one of {sorted(_CHART_ALLOWED_TF)}"})
+
+    from .chart_engine import get_chart_history
+    result = get_chart_history(sym, tf=tf, lookback=lookback)
+    if not result.get("ok"):
+        return JSONResponse(status_code=422, content=result)
+    return result
+
+
 @app.get("/api/chart/signals")
 def chart_signals():
     """

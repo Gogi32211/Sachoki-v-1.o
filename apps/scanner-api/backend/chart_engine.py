@@ -63,6 +63,54 @@ _SIG_LABELS: dict[str, str] = {
 }
 
 
+# Signal display labels that belong to the L / WLNBB group
+_L_DISPLAY: frozenset[str] = frozenset({
+    "L34", "L43", "L64", "L22", "L1L2", "L2L5", "L55", "L2L4",
+    "FR34", "FR43", "FR64", "BL", "UI",
+    "BO↑", "BO↓", "BX↑", "BX↓", "BE↑", "BE↓",
+})
+# FUCHSIA display labels → F row
+_F_DISPLAY: frozenset[str] = frozenset({"F↑", "F↓"})
+# CCI context labels → CTX row
+_CTX_DISPLAY: frozenset[str] = frozenset({"CCI✓", "CCIR", "CCIB"})
+# PRE_PUMP → VOL row
+_VOL_EXTRA: frozenset[str] = frozenset({"PP"})
+
+
+def _group_signals(signals: list[str], vol_bucket: str) -> dict[str, list[str]]:
+    """
+    Group per-bar display-label signals into named timeline rows.
+    Works on the already-mapped labels (output of _active_signals).
+    """
+    groups: dict[str, list[str]] = {
+        k: [] for k in (
+            "z", "t", "l", "f", "fly", "g", "b", "i",
+            "ult", "vol", "vabs", "wick", "setup", "gog", "ctx",
+        )
+    }
+    # Vol bucket badge — omit "N" (normal) to reduce noise
+    if vol_bucket and vol_bucket not in ("", "N"):
+        groups["vol"].append(vol_bucket)
+
+    for sig in signals:
+        if sig.startswith("Z"):
+            groups["z"].append(sig)
+        elif sig.startswith("T"):
+            groups["t"].append(sig)
+        elif sig in _L_DISPLAY:
+            groups["l"].append(sig)
+        elif sig in _F_DISPLAY:
+            groups["f"].append(sig)
+        elif sig in _CTX_DISPLAY:
+            groups["ctx"].append(sig)
+        elif sig in _VOL_EXTRA:
+            groups["vol"].append(sig)
+        else:
+            groups["ctx"].append(sig)  # safe fallback
+
+    return groups
+
+
 def _fetch_for_chart(symbol: str, tf: str, bars: int) -> pd.DataFrame | None:
     """Fetch enough history so `bars` completed candles are available after slicing."""
     multiplier = _TF_DAYS.get(tf, 2)
@@ -244,6 +292,82 @@ def get_chart_score(symbol: str, tf: str = "1d") -> dict:
         "generated_at": _now_iso(),
     })
     return panel
+
+
+def get_chart_history(symbol: str, tf: str = "1d", lookback: int = 60) -> dict:
+    """
+    Historical per-bar signal timeline for the Super Chart History view.
+    Reuses _fetch_for_chart → compute_tz + compute_wlnbb → group signals.
+    Returns bars sorted oldest → newest (left-to-right timeline).
+    No scoring per bar — only OHLCV, T/Z, WLNBB, RSI, CCI.
+    """
+    sym  = symbol.upper().strip()
+    bars = min(max(lookback, 10), 120)
+
+    df = _fetch_for_chart(sym, tf, bars)
+    if df is None:
+        return {
+            "ok": False, "ticker": sym, "timeframe": tf, "lookback": bars,
+            "bars": [],
+            "meta": {"source": "massive-computed", "generated_at": _now_iso(),
+                     "warning": f"no data returned for {sym} ({tf})"},
+        }
+
+    try:
+        tz_df = _compute_tz(df)
+        wl_df = _compute_wlnbb(df)
+    except Exception as exc:
+        log.warning("History signal compute error for %s: %s", sym, exc)
+        return {
+            "ok": False, "ticker": sym, "timeframe": tf, "lookback": bars,
+            "bars": [],
+            "meta": {"source": "massive-computed", "generated_at": _now_iso(),
+                     "warning": "signal computation failed"},
+        }
+
+    combined = pd.concat([df, tz_df, wl_df], axis=1)
+    combined = combined.iloc[-bars:] if len(combined) > bars else combined
+
+    out_bars: list[dict] = []
+    for ts, row in combined.iterrows():
+        date_str = _ts_to_date(ts)
+        tz_row = tz_df.loc[ts] if ts in tz_df.index else pd.Series(dtype=object)
+        wl_row = wl_df.loc[ts] if ts in wl_df.index else pd.Series(dtype=object)
+
+        sigs       = _active_signals(tz_row, wl_row)
+        vol_bucket = str(wl_row.get("vol_bucket", row.get("vol_bucket", "")))
+        groups     = _group_signals(sigs, vol_bucket)
+
+        close_val = float(row["close"]) if not pd.isna(row["close"]) else None
+        rsi_val   = float(wl_row.get("rsi", row.get("rsi", None)) or 0) or None
+        cci_val   = float(wl_row.get("cci_sma", row.get("cci_sma", None)) or 0) or None
+
+        out_bars.append({
+            "date":         date_str,
+            "display_date": date_str[5:],   # MM-DD
+            "datetime":     f"{date_str}T00:00:00",
+            "close":        round(close_val, 4) if close_val is not None else None,
+            "rsi":          round(rsi_val, 2)   if rsi_val  is not None else None,
+            "cci":          round(cci_val, 2)   if cci_val  is not None else None,
+            "score":        None,   # no per-bar scoring
+            "turbo":        None,
+            "rtb":          None,
+            "category":     None,
+            "signals":      groups,
+        })
+
+    return {
+        "ok":        True,
+        "ticker":    sym,
+        "timeframe": tf,
+        "lookback":  bars,
+        "bars":      out_bars,
+        "meta": {
+            "source":       "massive-computed",
+            "generated_at": _now_iso(),
+            "warning":      None,
+        },
+    }
 
 
 def get_chart_snapshot(symbol: str, tf: str = "1d", bars: int = 150) -> dict:

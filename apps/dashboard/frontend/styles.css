@@ -401,6 +401,85 @@ tbody tr:last-child { border-bottom: none; }
 }
 .dim-text { color: var(--text-dim); }
 
+/* ── Chart mode tabs (Latest / History) ───────────────────────────────────── */
+.chart-mode-tabs {
+  display: flex; gap: 0; border: 1px solid var(--border2); border-radius: var(--radius);
+  overflow: hidden; align-self: flex-end;
+}
+.chart-mode-tab {
+  padding: 4px 14px; font-size: .78rem; cursor: pointer;
+  background: none; border: none; color: var(--text-dim);
+  transition: background .12s, color .12s;
+}
+.chart-mode-tab:hover { background: #21262d; color: var(--text2); }
+.chart-mode-tab.active { background: var(--blue); color: #0d0f14; font-weight: 600; }
+
+/* ── History / Timeline table ─────────────────────────────────────────────── */
+.timeline-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 0; font-size: .78rem; color: var(--text2);
+}
+.timeline-meta { font-size: .65rem; color: var(--text-dim); font-family: monospace; }
+.timeline-wrap {
+  overflow-x: auto; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--surface);
+  max-height: 80vh; overflow-y: auto;
+}
+.timeline-table {
+  border-collapse: collapse; min-width: max-content;
+}
+.timeline-table th,
+.timeline-table td {
+  border: 1px solid var(--border2);
+  padding: 3px 5px;
+  vertical-align: top;
+  font-size: .68rem;
+  white-space: nowrap;
+}
+/* Sticky first column (row labels) */
+.tl-row-label {
+  position: sticky; left: 0; z-index: 2;
+  background: #1c2128; color: var(--text-dim);
+  font-weight: 600; text-transform: uppercase;
+  font-size: .64rem; min-width: 46px; text-align: right;
+  padding-right: 7px; border-right: 2px solid var(--border);
+}
+/* Sticky header (dates) */
+.timeline-table thead th {
+  position: sticky; top: 0; z-index: 3;
+  background: #1c2128; text-align: center;
+  color: var(--text2); font-size: .66rem; min-width: 44px;
+}
+/* Corner cell: sticky both axes */
+.tl-corner {
+  position: sticky; left: 0; top: 0; z-index: 4 !important;
+  background: #1c2128;
+}
+.tl-date { color: var(--text-dim); }
+.tl-cell { text-align: center; padding: 2px 3px; min-width: 44px; }
+/* Separator between signal rows and numeric rows */
+.tl-sep-row th, .tl-sep-row td { height: 4px; padding: 0; border-top: 2px solid var(--border); }
+.tl-sep-cell { background: var(--surface) !important; }
+/* Numeric cells */
+.tl-num     { text-align: right; font-family: monospace; color: var(--text2);    font-size: .68rem; }
+.tl-num-pos { text-align: right; font-family: monospace; color: var(--green);    font-size: .68rem; }
+.tl-num-neg { text-align: right; font-family: monospace; color: var(--red);      font-size: .68rem; }
+.tl-num-dim { text-align: right; font-family: monospace; color: var(--text-dim); font-size: .68rem; }
+/* Timeline signal badges */
+.tl-badge {
+  display: inline-block; padding: 1px 4px; border-radius: 3px;
+  font-size: .6rem; font-weight: 600; margin: 1px;
+  border: 1px solid transparent; line-height: 1.4;
+}
+.badge-z       { background: #2c1010; color: #f85149; border-color: #6e1a1a; }
+.badge-t       { background: #0d1f1a; color: #3fb950; border-color: #238636; }
+.badge-l       { background: #0d1520; color: #58a6ff; border-color: #1f6feb; }
+.badge-f       { background: #1a0d20; color: #d2a8ff; border-color: #7c3aed; }
+.badge-fly     { background: #1a130d; color: #ffa657; border-color: #9e6a03; }
+.badge-vol     { background: #1a1200; color: #e3b341; border-color: #7d5f00; }
+.badge-ctx     { background: #0d1a20; color: #79c0ff; border-color: #388bfd; }
+.badge-neutral { background: #1c2128; color: var(--text-dim); border-color: var(--border2); }
+
 /* ── Ultra Scan Controls ──────────────────────────────────────────────────── */
 .scan-controls-card {
   background: var(--surface); border: 1px solid var(--border);

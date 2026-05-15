@@ -318,6 +318,10 @@ let _pollTimer       = null;
 let _scanRunId       = null;
 let _scanRunning     = false;
 
+// ── Super Chart state ─────────────────────────────────────────────────────────
+let _chartMode       = "latest";   // "latest" | "history"
+let _historyLookback = 60;
+
 // ── Scan controls: sample lists + controls init ───────────────────────────────
 async function loadSampleListsAndInit() {
   const ctrlEl = $("scanControls");
@@ -642,6 +646,25 @@ function renderCandidateTable(candidates) {
 // ═════════════════════════════════════════════════════════════════════════════
 // PAGE: SUPERCHART
 // ═════════════════════════════════════════════════════════════════════════════
+
+function _setChartMode(mode) {
+  _chartMode = mode;
+  document.querySelectorAll(".chart-mode-tab").forEach(t => {
+    t.classList.toggle("active", t.dataset.mode === mode);
+  });
+  const lbWrap = $("chartLookbackWrap");
+  const barsWrap = $("chartBarsWrap");
+  if (lbWrap) lbWrap.style.display = mode === "history" ? "" : "none";
+  if (barsWrap) barsWrap.style.display = mode === "latest" ? "" : "none";
+  const btn = $("chartLoadBtn");
+  if (btn) btn.textContent = mode === "history" ? "Load History" : "Load Chart";
+}
+
+function _loadChartInMode() {
+  if (_chartMode === "history") return loadChartHistory();
+  return loadChartSnapshot();
+}
+
 async function renderChart() {
   const initialSym = _pendingChartSym || "";
   const autoLoad   = Boolean(_pendingChartSym);
@@ -652,7 +675,7 @@ async function renderChart() {
 
       <div class="chart-header">
         <div>
-          <div class="section-label" style="margin:0 0 6px">Superchart Preview</div>
+          <div class="section-label" style="margin:0 0 6px">Superchart</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
             <span class="pill ok">Massive</span>
             <span class="chip">1D Completed Candles</span>
@@ -660,6 +683,10 @@ async function renderChart() {
           </div>
         </div>
         <div class="chart-controls">
+          <div class="chart-mode-tabs">
+            <button class="chart-mode-tab${_chartMode === "latest"  ? " active" : ""}" data-mode="latest">Latest</button>
+            <button class="chart-mode-tab${_chartMode === "history" ? " active" : ""}" data-mode="history">History</button>
+          </div>
           <label class="chart-label">Symbol
             <input id="chartSym" type="text" placeholder="AAPL" maxlength="7"
               class="chart-input" value="${esc(initialSym)}" autocomplete="off" />
@@ -669,7 +696,7 @@ async function renderChart() {
               <option value="1d" selected>1D Daily</option>
             </select>
           </label>
-          <label class="chart-label">Bars
+          <label class="chart-label" id="chartBarsWrap"${_chartMode !== "latest" ? ' style="display:none"' : ""}>Bars
             <select id="chartBars" class="chart-select">
               <option value="50">50</option>
               <option value="100">100</option>
@@ -677,8 +704,16 @@ async function renderChart() {
               <option value="200">200</option>
             </select>
           </label>
+          <label class="chart-label" id="chartLookbackWrap"${_chartMode !== "history" ? ' style="display:none"' : ""}>Lookback
+            <select id="chartLookback" class="chart-select">
+              <option value="30">30 bars</option>
+              <option value="60" selected>60 bars</option>
+              <option value="90">90 bars</option>
+              <option value="120">120 bars</option>
+            </select>
+          </label>
           <button id="chartLoadBtn" class="btn-refresh" style="align-self:flex-end;padding:6px 20px;font-size:.82rem">
-            Load Chart
+            ${_chartMode === "history" ? "Load History" : "Load Chart"}
           </button>
         </div>
       </div>
@@ -695,20 +730,27 @@ async function renderChart() {
         <div id="chartMetaSection" class="chart-meta-section"></div>
       </div>
 
+      <div id="chartHistoryArea" style="display:none"></div>
+
       <div id="chartPlaceholder" class="placeholder-box" style="margin-top:12px">
         <span class="placeholder-icon">◈</span>
-        <span class="placeholder-text">Enter a ticker and click Load Chart</span>
-        <span class="placeholder-sub">P0 Superchart Preview · Massive · No yfinance · dashboard BFF only</span>
+        <span class="placeholder-text">Enter a ticker and click ${_chartMode === "history" ? "Load History" : "Load Chart"}</span>
+        <span class="placeholder-sub">Superchart · Massive · No yfinance · dashboard BFF only</span>
       </div>
 
     </div>`;
 
-  const btn = $("chartLoadBtn");
-  if (btn) btn.addEventListener("click", loadChartSnapshot);
-  const inp = $("chartSym");
-  if (inp) inp.addEventListener("keydown", e => { if (e.key === "Enter") loadChartSnapshot(); });
+  // Mode tab listeners
+  document.querySelectorAll(".chart-mode-tab").forEach(tab => {
+    tab.addEventListener("click", () => _setChartMode(tab.dataset.mode));
+  });
 
-  if (autoLoad && initialSym) await loadChartSnapshot();
+  const btn = $("chartLoadBtn");
+  if (btn) btn.addEventListener("click", _loadChartInMode);
+  const inp = $("chartSym");
+  if (inp) inp.addEventListener("keydown", e => { if (e.key === "Enter") _loadChartInMode(); });
+
+  if (autoLoad && initialSym) await _loadChartInMode();
 }
 
 async function loadChartSnapshot() {
@@ -765,6 +807,149 @@ async function loadChartSnapshot() {
   // Render metadata + missing groups
   const metaEl = $("chartMetaSection");
   if (metaEl) metaEl.innerHTML = _buildChartMeta(data, candles.length);
+}
+
+// ── History / Timeline mode ───────────────────────────────────────────────────
+
+async function loadChartHistory() {
+  const sym      = ($("chartSym")?.value ?? "").trim().toUpperCase();
+  const tf       = $("chartTf")?.value ?? "1d";
+  const lookback = parseInt($("chartLookback")?.value ?? "60", 10);
+
+  const status      = $("chartStatus");
+  const chartArea   = $("chartAreaWrap");
+  const histArea    = $("chartHistoryArea");
+  const placeholder = $("chartPlaceholder");
+
+  if (!sym || !/^[A-Z]{1,5}(-[A-Z]{1,2})?$/.test(sym)) {
+    if (status) status.innerHTML = `<div class="state-banner error" style="margin:8px 0">Enter a valid ticker symbol (e.g. AAPL).</div>`;
+    return;
+  }
+
+  if (status)      status.innerHTML = `<div class="page-loading" style="padding:12px 0">Loading ${esc(sym)} history…</div>`;
+  if (chartArea)   chartArea.style.display = "none";
+  if (histArea)    histArea.style.display = "none";
+  if (placeholder) placeholder.style.display = "none";
+  _destroyChart();
+
+  const btn = $("chartLoadBtn");
+  if (btn) btn.disabled = true;
+
+  let data;
+  try {
+    data = await apiFetch("/api/dashboard/super-chart/history",
+                          { ticker: sym, timeframe: tf, lookback });
+  } catch (err) {
+    if (status) status.innerHTML = `<div class="state-banner error" style="margin:8px 0">History unavailable: ${esc(err.message)}</div>`;
+    if (btn) btn.disabled = false;
+    return;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+
+  if (status) status.innerHTML = "";
+
+  if (!data.ok || !(data.bars ?? []).length) {
+    const warn = data.meta?.warning ?? data.error ?? "No history data available.";
+    if (histArea) {
+      histArea.style.display = "";
+      histArea.innerHTML = `<div class="state-banner warn" style="margin:12px 0">${esc(warn)}</div>`;
+    }
+    return;
+  }
+
+  if (histArea) {
+    histArea.style.display = "";
+    histArea.innerHTML = _buildHistoryTimeline(data);
+  }
+}
+
+// Signal rows for the timeline table
+const _TL_ROWS = [
+  { key: "z",     label: "Z",     type: "sig", cls: "badge-z"       },
+  { key: "t",     label: "T",     type: "sig", cls: "badge-t"       },
+  { key: "l",     label: "L",     type: "sig", cls: "badge-l"       },
+  { key: "f",     label: "F",     type: "sig", cls: "badge-f"       },
+  { key: "fly",   label: "FLY",   type: "sig", cls: "badge-fly"     },
+  { key: "g",     label: "G",     type: "sig", cls: "badge-neutral" },
+  { key: "b",     label: "B",     type: "sig", cls: "badge-neutral" },
+  { key: "i",     label: "I",     type: "sig", cls: "badge-neutral" },
+  { key: "ult",   label: "ULT",   type: "sig", cls: "badge-neutral" },
+  { key: "vol",   label: "VOL",   type: "sig", cls: "badge-vol"     },
+  { key: "vabs",  label: "VABS",  type: "sig", cls: "badge-neutral" },
+  { key: "wick",  label: "WICK",  type: "sig", cls: "badge-neutral" },
+  { key: "setup", label: "SETUP", type: "sig", cls: "badge-neutral" },
+  { key: "gog",   label: "GOG",   type: "sig", cls: "badge-neutral" },
+  { key: "ctx",   label: "CTX",   type: "sig", cls: "badge-ctx"     },
+  // numeric separator + rows
+  { key: "_sep",  label: "",      type: "sep"  },
+  { key: "close", label: "close", type: "num", dec: 2  },
+  { key: "rsi",   label: "RSI",   type: "num", dec: 1  },
+  { key: "cci",   label: "CCI",   type: "num", dec: 1  },
+];
+
+function _numCls(key, val) {
+  if (key === "rsi") return val > 70 ? "tl-num tl-num-neg" : val < 30 ? "tl-num tl-num-pos" : "tl-num";
+  if (key === "cci") return val > 100 ? "tl-num tl-num-pos" : val < -100 ? "tl-num tl-num-neg" : "tl-num";
+  return "tl-num";
+}
+
+function _buildHistoryTimeline(data) {
+  const bars = data.bars ?? [];
+  const ticker = data.ticker ?? "";
+  const tf     = data.timeframe ?? "1d";
+  const genAt  = data.meta?.generated_at ?? "";
+
+  const dateHeaders = bars.map(b =>
+    `<th class="tl-date">${esc(b.display_date)}</th>`
+  ).join("");
+
+  const tableRows = _TL_ROWS.map(row => {
+    if (row.type === "sep") {
+      const emptyCells = bars.map(() => `<td class="tl-sep-cell"></td>`).join("");
+      return `<tr class="tl-sep-row"><th class="tl-row-label tl-sep-cell"></th>${emptyCells}</tr>`;
+    }
+
+    if (row.type === "sig") {
+      const cells = bars.map(bar => {
+        const sigs = bar.signals?.[row.key] ?? [];
+        if (!sigs.length) return `<td class="tl-cell"></td>`;
+        const badges = sigs.map(s =>
+          `<span class="tl-badge ${row.cls}">${esc(s)}</span>`
+        ).join("");
+        return `<td class="tl-cell">${badges}</td>`;
+      }).join("");
+      return `<tr><th class="tl-row-label">${esc(row.label)}</th>${cells}</tr>`;
+    }
+
+    if (row.type === "num") {
+      const cells = bars.map(bar => {
+        const val = bar[row.key];
+        if (val == null) return `<td class="tl-num tl-num-dim">—</td>`;
+        return `<td class="${_numCls(row.key, val)}">${Number(val).toFixed(row.dec ?? 2)}</td>`;
+      }).join("");
+      return `<tr><th class="tl-row-label">${esc(row.label)}</th>${cells}</tr>`;
+    }
+
+    return "";
+  }).join("");
+
+  return `
+    <div class="timeline-header">
+      <span>${esc(ticker)} · ${esc(tf)} · ${bars.length} bars</span>
+      <span class="timeline-meta">${esc(genAt.slice(0, 16).replace("T", " ") + " UTC")}</span>
+    </div>
+    <div class="timeline-wrap">
+      <table class="timeline-table">
+        <thead>
+          <tr>
+            <th class="tl-corner tl-row-label"></th>
+            ${dateHeaders}
+          </tr>
+        </thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>`;
 }
 
 function _renderLwChart(candles, markers) {

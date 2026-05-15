@@ -24,8 +24,8 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "info").upper())
 
 app = FastAPI(title="dashboard", version="0.6.0")
 
-_VERSION = "0.7.0"
-_PHASE   = "8D-ultra-scan-controls"
+_VERSION = "0.8.0"
+_PHASE   = "8E-history-timeline"
 
 _FRONTEND_DIR = pathlib.Path(__file__).parent.parent / "frontend"
 
@@ -570,6 +570,54 @@ def dashboard_chart_signals(
         }
 
     data["source"]       = "dashboard-bff"
+    data["proxied_from"] = "scanner-api"
+    return data
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Super Chart History proxy — Phase 8E
+# ─────────────────────────────────────────────────────────────────────────────
+
+_HISTORY_MAX_LOOKBACK     = 120
+_HISTORY_DEFAULT_LOOKBACK = 60
+_HISTORY_ALLOWED_TF       = {"1d"}
+
+
+@app.get("/api/dashboard/super-chart/history")
+def super_chart_history(
+    ticker:   str = Query(...),
+    timeframe: str = Query(default="1d"),
+    lookback:  int = Query(default=_HISTORY_DEFAULT_LOOKBACK, ge=10, le=_HISTORY_MAX_LOOKBACK),
+):
+    """
+    Proxy /api/chart/history from scanner-api.
+    Returns per-bar T/Z + WLNBB signals grouped into timeline rows.
+    """
+    sym = _validate_chart_sym(ticker)
+    if sym is None:
+        return JSONResponse(status_code=422,
+                            content={"ok": False, "error": "invalid ticker symbol"})
+    if timeframe not in _HISTORY_ALLOWED_TF:
+        return JSONResponse(status_code=422,
+                            content={"ok": False, "error": f"timeframe must be one of {sorted(_HISTORY_ALLOWED_TF)}"})
+
+    data, err = _chart_get(
+        "/api/chart/history",
+        params={"symbol": sym, "tf": timeframe, "lookback": lookback},
+    )
+    if data is None:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok":      False,
+                "ticker":  sym,
+                "bars":    [],
+                "error":   err or "scanner-api unavailable",
+                "source":  "dashboard-bff",
+            },
+        )
+
+    data["source"]      = "dashboard-bff"
     data["proxied_from"] = "scanner-api"
     return data
 
