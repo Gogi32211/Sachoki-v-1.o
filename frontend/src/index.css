@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── MD3 Design Tokens — Dark Color Scheme ────────────────────────────────── */
+:root {
+  /* Primary — blue */
+  --md-primary:              #82AAFF;
+  --md-on-primary:           #002D6E;
+  --md-primary-container:    #1A3A6E;
+  --md-on-primary-container: #D8E2FF;
+
+  /* Secondary — teal */
+  --md-secondary:            #5EEAD4;
+  --md-on-secondary:         #003731;
+  --md-secondary-container:  #004E45;
+
+  /* Surface — dark neutral */
+  --md-surface:                    #0D0E12;
+  --md-surface-dim:                #090A0D;
+  --md-surface-bright:             #1A1B22;
+  --md-surface-container-low:      #12131A;
+  --md-surface-container:          #17181F;
+  --md-surface-container-high:     #1E2028;
+  --md-surface-container-highest:  #25272F;
+
+  /* On-surface */
+  --md-on-surface:         #E3E2E8;
+  --md-on-surface-variant: #8B8BA0;
+
+  /* Outline */
+  --md-outline:         #3D3D50;
+  --md-outline-variant: #272738;
+
+  /* Error */
+  --md-error:           #FFB4AB;
+  --md-on-error:        #690005;
+  --md-error-container: #93000A;
+
+  /* Semantic: trading */
+  --md-positive:           #6EE7B7;   /* green — gain */
+  --md-positive-container: #064E3B;
+  --md-negative:           #FCA5A5;   /* red  — loss  */
+  --md-negative-container: #7F1D1D;
+  --md-warning:            #FDE68A;   /* amber — caution */
+  --md-warning-container:  #78350F;
+}
+
+/* ── Global Base ──────────────────────────────────────────────────────────── */
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html { font-size: 16px; }
+
+  body {
+    background-color: var(--md-surface);
+    color: var(--md-on-surface);
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-size: 14px;
+    line-height: 20px;
+    -webkit-font-smoothing: antialiased;
+    min-font-size: 14px;
+  }
+
+  /* Enforce min 14px — catches any stray smaller sizes */
+  * { min-font-size: 14px; }
+
+  /* Monospace */
+  code, kbd, pre, .font-mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+  /* Scrollbar — MD3 toned */
+  ::-webkit-scrollbar        { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track  { background: var(--md-surface-container-low); }
+  ::-webkit-scrollbar-thumb  { background: var(--md-outline); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--md-on-surface-variant); }
+
+  /* Focus ring — MD3 style */
+  :focus-visible {
+    outline: 2px solid var(--md-primary);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+/* ── MD3 Component Utilities ──────────────────────────────────────────────── */
+@layer components {
+  /* State layers — MD3 uses these for hover/press feedback */
+  .md-state-primary-hover   { @apply hover:bg-[color-mix(in_srgb,var(--md-primary)_8%,transparent)]; }
+  .md-state-surface-hover   { @apply hover:bg-white/5; }
+  .md-state-error-hover     { @apply hover:bg-[color-mix(in_srgb,var(--md-error)_8%,transparent)]; }
+
+  /* Elevation surfaces */
+  .md-surface-1 { background-color: var(--md-surface-container-low); }
+  .md-surface-2 { background-color: var(--md-surface-container); }
+  .md-surface-3 { background-color: var(--md-surface-container-high); }
+  .md-surface-4 { background-color: var(--md-surface-container-highest); }
+
+  /* Typography shortcuts */
+  .md-label  { font-size: 14px; line-height: 20px; letter-spacing: 0.1px; }
+  .md-body   { font-size: 16px; line-height: 24px; }
+  .md-title  { font-size: 22px; line-height: 28px; font-weight: 500; }
+}

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+node_modules/
+frontend/dist/
+frontend/package-lock.json
+*.db
+*.sqlite
+tz_intelligence_package/.DS_Store
+split_universe_latest.csv
+.claude/
