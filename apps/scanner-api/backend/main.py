@@ -144,7 +144,7 @@ def version():
 
 @app.get("/api/debug/status")
 def debug_status():
-    import db as _db
+    from . import db as _db
 
     db_configured = bool(_db.DATABASE_URL)
     db_connected, db_error = (False, None)
@@ -185,7 +185,7 @@ def debug_status():
 
 @app.get("/api/debug/db")
 def debug_db():
-    import db as _db
+    from . import db as _db
 
     if not _db.DATABASE_URL:
         return {
@@ -259,7 +259,7 @@ def get_latest_ultra_scan(
     universe: str | None = Query(default=None),
     tf: str | None = Query(default=None),
 ):
-    import db as _db
+    from . import db as _db
 
     if not _db.DATABASE_URL:
         return {"has_data": False, "message": "DATABASE_URL not configured", "source": "db"}
@@ -318,7 +318,7 @@ def get_latest_ultra_candidates(
     sort_by: str = Query(default="ultra_score"),
     sort_dir: str = Query(default="desc"),
 ):
-    import db as _db
+    from . import db as _db
 
     sort_col   = sort_by if sort_by in _SAFE_SORT_COLS else "ultra_score"
     sort_order = "DESC" if sort_dir.lower() != "asc" else "ASC"
