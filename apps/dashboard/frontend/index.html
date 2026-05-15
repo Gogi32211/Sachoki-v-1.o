@@ -3,76 +3,104 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sachoki Dashboard Preview</title>
+  <title>Sachoki Dashboard</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
 
-  <!-- ── Header ── -->
-  <header class="header">
-    <h1>Sachoki Dashboard</h1>
-    <span class="phase-badge">Phase 4B Preview</span>
-    <span id="scannerStatus" class="scanner-status err">Scanner API: —</span>
+  <!-- ── Command bar ── -->
+  <header class="cmdbar">
+    <span class="cmdbar-brand">Sachoki Dashboard</span>
+    <span class="cmdbar-phase">Preview v2 · Phase 6A</span>
+    <div class="cmdbar-meta">
+      <span id="cmScanner">Scanner: —</span>
+      <span class="sep">|</span>
+      <span>Run <strong id="cmRunId">—</strong></span>
+      <span class="sep">|</span>
+      <span id="cmUniverse">—</span>
+      <span class="sep">|</span>
+      <span id="cmTf">—</span>
+      <span class="sep">|</span>
+      <span id="cmFinished">—</span>
+    </div>
     <span class="spacer"></span>
-    <button id="refreshBtn">Refresh</button>
+    <button id="refreshBtn" class="btn-refresh">⟳ Refresh</button>
   </header>
 
-  <!-- ── Loading / Error ── -->
-  <div id="loadingMsg" style="padding:40px;text-align:center;color:#6b7280">Loading…</div>
-  <div id="errorMsg"   style="display:none"></div>
+  <!-- ── Error banner (hidden by default) ── -->
+  <div id="errorBanner" class="error-banner" style="display:none"></div>
 
-  <!-- ── Main content (hidden until data loads) ── -->
+  <!-- ── Loading ── -->
+  <div id="loadingMsg">Loading dashboard…</div>
+
+  <!-- ── Main content ── -->
   <div id="mainContent" class="container" style="display:none">
 
     <!-- State banner -->
-    <div id="stateBanner" class="state-banner ready">—</div>
-
-    <!-- Scan metadata -->
-    <div class="section-title">Latest Ultra Scan</div>
-    <div class="meta-grid">
-      <div class="meta-card"><div class="label">State</div>     <div class="value" id="metaState">—</div></div>
-      <div class="meta-card"><div class="label">Run ID</div>    <div class="value" id="metaRunId">—</div></div>
-      <div class="meta-card"><div class="label">Universe</div>  <div class="value" id="metaUniverse">—</div></div>
-      <div class="meta-card"><div class="label">Timeframe</div> <div class="value" id="metaTimeframe">—</div></div>
-      <div class="meta-card"><div class="label">Candidates</div><div class="value" id="metaTotal">—</div></div>
-      <div class="meta-card"><div class="label">Finished</div>  <div class="value" id="metaFinished">—</div></div>
-      <div class="meta-card"><div class="label">Source</div>    <div class="value" id="metaSource">—</div></div>
-    </div>
+    <div id="stateBanner" class="state-banner ready"></div>
 
     <!-- Summary cards -->
-    <div class="section-title">Summary</div>
-    <div class="summary-row">
-      <div class="summary-card"><div class="num" id="sumTotal">—</div><div class="lbl">Total Candidates</div></div>
-      <div class="summary-card"><div class="num" id="sumScore">—</div><div class="lbl">Top Score</div></div>
-      <div class="summary-card"><div class="num" id="sumBands">—</div><div class="lbl">Bands</div></div>
-      <div class="summary-card"><div class="num" id="sumSectors">—</div><div class="lbl">Sectors</div></div>
+    <div class="section-label">Scan Summary</div>
+    <div class="cards-row">
+      <div class="card"><div class="c-label">Candidates</div><div class="c-value" id="sumTotal">—</div><div class="c-sub">total returned</div></div>
+      <div class="card"><div class="c-label">Top Score</div><div class="c-value" id="sumScore" style="color:var(--green)">—</div><div class="c-sub">ultra score</div></div>
+      <div class="card"><div class="c-label">Run ID</div><div class="c-value" id="sumRunId" style="font-size:1.1rem">—</div><div class="c-sub" id="sumSource">—</div></div>
+      <div class="card"><div class="c-label">Bands</div><div class="c-value" id="sumBandCount">—</div><div class="c-sub">active bands</div></div>
+      <div class="card"><div class="c-label">Sectors</div><div class="c-value" id="sumSectorCount">—</div><div class="c-sub">covered</div></div>
+      <div class="card"><div class="c-label">Universe</div><div class="c-value" id="sumUniverse" style="font-size:.9rem;padding-top:4px">—</div><div class="c-sub" id="sumTf">—</div></div>
     </div>
 
-    <!-- Bands -->
-    <div class="section-title">Bands</div>
-    <div id="bandsChips" class="chips"></div>
-
-    <!-- Sectors -->
-    <div class="section-title">Sectors</div>
-    <div id="sectorsChips" class="chips" style="margin-bottom:24px"></div>
-
     <!-- Best setups -->
-    <div class="section-title">Best Setups</div>
-    <div id="setupsGrid" class="setups-grid"></div>
+    <div class="section-label">Best Setups</div>
+    <div id="setupsRow" class="setups-row"></div>
 
-    <!-- Top candidates table -->
-    <div class="section-title">Top Candidates</div>
+    <!-- Band + Sector distribution -->
+    <div class="section-label">Distribution</div>
+    <div class="dist-row">
+      <div class="dist-box">
+        <div class="d-title">Bands</div>
+        <div id="bandBars"></div>
+      </div>
+      <div class="dist-box">
+        <div class="d-title">Top Sectors</div>
+        <div id="sectorBars"></div>
+      </div>
+    </div>
+
+    <!-- Candidates table with filters -->
+    <div class="section-label">Top Candidates</div>
+    <div class="filters-bar">
+      <label>Symbol
+        <input id="fSearch" type="text" placeholder="AAPL, MSFT…" autocomplete="off" />
+      </label>
+      <label>Band
+        <select id="fBand">
+          <option value="">All</option>
+          <option>A+</option><option>A</option><option>B</option><option>C</option><option>D</option>
+        </select>
+      </label>
+      <label>Sector
+        <select id="fSector"><option value="">All Sectors</option></select>
+      </label>
+      <label>Min Score
+        <input id="fMinScore" type="number" min="0" max="100" placeholder="0" style="width:70px" />
+      </label>
+      <button class="btn-clear" id="clearFilters">Clear</button>
+      <span class="filter-count" id="filterCount"></span>
+    </div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>#</th>
+            <th class="td-rank">#</th>
             <th>Symbol</th>
             <th>Sector</th>
+            <th>Price</th>
+            <th>Chg%</th>
             <th>Score</th>
             <th>Band</th>
-            <th>Priority</th>
             <th>Signal</th>
+            <th>Why Selected</th>
             <th>Risk Flags</th>
           </tr>
         </thead>
@@ -81,24 +109,14 @@
     </div>
 
     <!-- Data health -->
-    <div class="section-title">Data Health</div>
+    <div class="section-label">Data Health</div>
     <div class="health-grid">
-      <div class="health-card">
-        <div class="h-label">Scanner API</div>
-        <div id="healthScannerReach" class="h-val">—</div>
-      </div>
-      <div class="health-card">
-        <div class="h-label">Ultra Source</div>
-        <div class="h-val" id="healthUltraSource">—</div>
-      </div>
-      <div class="health-card">
-        <div class="h-label">Ultra Status</div>
-        <div class="h-val" id="healthUltraStatus">—</div>
-      </div>
-      <div class="health-card">
-        <div class="h-label">Candidate Count</div>
-        <div class="h-val" id="healthUltraCount">—</div>
-      </div>
+      <div class="health-card"><div class="h-label">Dashboard State</div><div class="h-val" id="hState">—</div></div>
+      <div class="health-card"><div class="h-label">Scanner API</div><div class="h-val" id="hScanner">—</div></div>
+      <div class="health-card"><div class="h-label">Ultra Source</div><div class="h-val" id="hUltraSrc">—</div></div>
+      <div class="health-card"><div class="h-label">Ultra Status</div><div class="h-val" id="hUltraSt">—</div></div>
+      <div class="health-card"><div class="h-label">Candidate Count</div><div class="h-val" id="hCandCount">—</div></div>
+      <div class="health-card"><div class="h-label">Last Refreshed</div><div class="h-val" id="hRefresh">—</div></div>
     </div>
 
   </div><!-- /mainContent -->
