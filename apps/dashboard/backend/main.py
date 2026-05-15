@@ -1,5 +1,5 @@
 """
-dashboard BFF — Phase 4B: scanner-api bridge + static frontend preview.
+dashboard BFF — Phase 8A-P1: top-movers + best-setups endpoints.
 
 Serves a minimal static HTML/JS/CSS frontend at / and keeps all BFF API
 routes intact. No scans, no scoring, no DB writes, no AI/live prices.
@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -19,10 +20,10 @@ from fastapi.staticfiles import StaticFiles
 log = logging.getLogger(__name__)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "info").upper())
 
-app = FastAPI(title="dashboard", version="0.4.0")
+app = FastAPI(title="dashboard", version="0.5.0")
 
-_VERSION = "0.4.0"
-_PHASE   = "4B-static-frontend-preview"
+_VERSION = "0.5.0"
+_PHASE   = "8A-P1-top-movers-best-setups"
 
 _FRONTEND_DIR = pathlib.Path(__file__).parent.parent / "frontend"
 
@@ -64,6 +65,13 @@ def _scanner_get(path: str, params: dict | None = None) -> tuple[dict | None, st
 # BFF helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+_BAND_ORDER: dict[str, int] = {"A+": 0, "A": 1, "B": 2, "C": 3, "D": 4}
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _band_summary(candidates: list[dict]) -> dict:
     counts: dict[str, int] = {}
     for c in candidates:
@@ -80,29 +88,118 @@ def _sector_summary(candidates: list[dict]) -> dict:
     return counts
 
 
-def _best_setups(candidates: list[dict], n: int = 5) -> list[dict]:
-    """Deterministic top-N by ultra_score — no AI, no scoring."""
-    sorted_c = sorted(candidates, key=lambda x: x.get("ultra_score") or 0, reverse=True)
-    result = []
-    for c in sorted_c[:n]:
-        score = c.get("ultra_score") or 0
-        why = list(c.get("why_selected") or [])
-        if not any("Ultra score" in w for w in why):
-            why.insert(0, f"Ultra score {score}")
-        if "Top Ultra candidate" not in why:
-            why.insert(0, "Top Ultra candidate")
-        result.append({
+def _setup_reason(c: dict) -> list[str]:
+    reasons: list[str] = []
+    score  = c.get("ultra_score") or 0
+    band   = c.get("band") or ""
+    chg    = c.get("change_pct")
+    engine = c.get("score_engine") or ""
+    reasons.append(f"Ultra score {score}")
+    if band:
+        reasons.append(f"Band {band}")
+    if chg is not None:
+        reasons.append("Positive change_pct" if chg >= 0 else f"Change {chg:+.2f}%")
+    if "real_ultra" in engine:
+        reasons.append("Real Ultra score")
+    return reasons
+
+
+def _build_setups(
+    candidates: list[dict],
+    n:          int        = 5,
+    min_score:  int        = 70,
+    bands:      list[str] | None = None,
+    sector:     str | None = None,
+) -> dict:
+    """Rule-based best-setups selection. Returns {setups, fallback}."""
+    eligible = [
+        c for c in candidates
+        if (c.get("ultra_score") or 0) >= min_score
+        and (c.get("band") or "D") != "D"
+        and (not bands  or c.get("band") in bands)
+        and (not sector or c.get("sector") == sector)
+    ]
+    fallback = False
+    if not eligible:
+        fallback = True
+        pool = sorted(candidates, key=lambda x: x.get("ultra_score") or 0, reverse=True)
+        eligible = [c for c in pool if (not sector or c.get("sector") == sector)][:3]
+
+    eligible.sort(key=lambda c: (
+        -(c.get("ultra_score") or 0),
+        _BAND_ORDER.get(c.get("band") or "D", 4),
+        -(c.get("change_pct") or 0),
+    ))
+
+    setups = [
+        {
             "symbol":       c.get("symbol", ""),
             "sector":       c.get("sector", ""),
-            "ultra_score":  score,
+            "industry":     c.get("industry", ""),
+            "ultra_score":  c.get("ultra_score") or 0,
             "band":         c.get("band", ""),
-            "priority":     c.get("priority", ""),
-            "action_bucket": c.get("action_bucket", ""),
             "final_signal": c.get("final_signal", ""),
-            "why_selected": why[:5],
-            "source":       "scanner-api",
-        })
-    return result
+            "change_pct":   c.get("change_pct"),
+            "why_selected": list(c.get("why_selected") or []),
+            "risk_flags":   list(c.get("risk_flags") or []),
+            "setup_reason": _setup_reason(c),
+            "score_engine": c.get("score_engine", ""),
+        }
+        for c in eligible[:n]
+    ]
+    return {"setups": setups, "fallback": fallback}
+
+
+def _mover_shape(c: dict) -> dict:
+    return {
+        "symbol":       c.get("symbol", ""),
+        "sector":       c.get("sector", ""),
+        "industry":     c.get("industry", ""),
+        "price":        c.get("price"),
+        "prev_close":   c.get("prev_close"),
+        "change_pct":   c.get("change_pct"),
+        "ultra_score":  c.get("ultra_score") or 0,
+        "band":         c.get("band", ""),
+        "final_signal": c.get("final_signal", ""),
+        "why_selected": list(c.get("why_selected") or []),
+        "risk_flags":   list(c.get("risk_flags") or []),
+        "score_engine": c.get("score_engine", ""),
+    }
+
+
+def _build_top_movers(
+    candidates: list[dict],
+    n:          int        = 5,
+    min_score:  int | None = None,
+    sector:     str | None = None,
+) -> dict:
+    """Sort by change_pct for gainers/losers. Returns {gainers, losers, stats}."""
+    pool = [
+        c for c in candidates
+        if c.get("change_pct") is not None
+        and (min_score is None or (c.get("ultra_score") or 0) >= min_score)
+        and (not sector or c.get("sector") == sector)
+    ]
+    gainers = sorted(pool, key=lambda x: x["change_pct"], reverse=True)[:n]
+    losers  = sorted(pool, key=lambda x: x["change_pct"])[:n]
+    with_chg    = sum(1 for c in candidates if c.get("change_pct") is not None)
+    without_chg = len(candidates) - with_chg
+    return {
+        "gainers": [_mover_shape(c) for c in gainers],
+        "losers":  [_mover_shape(c) for c in losers],
+        "stats": {
+            "total_candidates":  len(candidates),
+            "with_change_pct":   with_chg,
+            "without_change_pct": without_chg,
+        },
+    }
+
+
+def _fetch_all_candidates(total: int) -> list[dict]:
+    """Fetch up to 500 candidates from scanner-api latest run."""
+    limit = min(max(total, 1), 500)
+    data, _ = _scanner_get("/api/scans/ultra/latest/candidates", params={"limit": limit})
+    return data.get("candidates", []) if data else []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -187,30 +284,25 @@ def dashboard_bootstrap():
 
     run = scan_data.get("run", {})
 
-    # 2 — get top candidates
-    cand_data, cand_err = _scanner_get(
-        "/api/scans/ultra/latest/candidates",
-        params={"limit": 50, "offset": 0, "sort_by": "ultra_score", "sort_dir": "desc"},
-    )
-
-    candidates: list[dict] = []
-    if cand_data and cand_data.get("has_data"):
-        candidates = cand_data.get("candidates", [])
-
+    # 2 — get all candidates (up to 500)
     total = run.get("total_candidates") or 0
-    top_score = max((c.get("ultra_score") or 0 for c in candidates), default=0)
+    candidates = _fetch_all_candidates(total)
+
+    top_score  = max((c.get("ultra_score") or 0 for c in candidates), default=0)
+    setups_res = _build_setups(candidates, n=5)
+    movers_res = _build_top_movers(candidates, n=5)
 
     return {
         "dashboard_state": "SCAN_READY",
         "latest_scan": {
-            "has_data":        True,
-            "scan_run_id":     run.get("id"),
-            "status":          run.get("status"),
-            "universe":        run.get("universe"),
-            "timeframe":       run.get("timeframe"),
-            "finished_at":     run.get("finished_at"),
+            "has_data":         True,
+            "scan_run_id":      run.get("id"),
+            "status":           run.get("status"),
+            "universe":         run.get("universe"),
+            "timeframe":        run.get("timeframe"),
+            "finished_at":      run.get("finished_at"),
             "total_candidates": total,
-            "source":          "scanner-api",
+            "source":           "scanner-api",
         },
         "summary": {
             "total_candidates": total,
@@ -219,7 +311,13 @@ def dashboard_bootstrap():
             "sectors":          _sector_summary(candidates),
         },
         "top_candidates": candidates,
-        "best_setups":    _best_setups(candidates, n=5),
+        "best_setups":    setups_res["setups"],
+        "top_movers": {
+            "regular": {
+                "gainers": movers_res["gainers"],
+                "losers":  movers_res["losers"],
+            },
+        },
         "data_health": {
             "scanner_api": {
                 "reachable": True,
@@ -232,6 +330,74 @@ def dashboard_bootstrap():
                 "source":           "scanner-api",
             },
         },
+    }
+
+
+@app.get("/api/dashboard/top-movers")
+def dashboard_top_movers(
+    limit:     int       = Query(default=5,  ge=1, le=50),
+    source:    str       = Query(default="latest_ultra"),
+    min_score: int | None = Query(default=None),
+    sector:    str | None = Query(default=None),
+):
+    scan_data, _ = _scanner_get("/api/scans/ultra/latest")
+    if not scan_data or not scan_data.get("has_data"):
+        return {
+            "source":       "scanner-api",
+            "scan_run_id":  None,
+            "generated_at": _now_iso(),
+            "regular":      {"gainers": [], "losers": []},
+            "stats":        {"total_candidates": 0, "with_change_pct": 0, "without_change_pct": 0},
+            "message":      "No change_pct data available.",
+        }
+
+    run        = scan_data.get("run", {})
+    total      = run.get("total_candidates") or 0
+    candidates = _fetch_all_candidates(total)
+    movers     = _build_top_movers(candidates, n=limit, min_score=min_score, sector=sector)
+
+    return {
+        "source":       "scanner-api",
+        "scan_run_id":  run.get("id"),
+        "generated_at": _now_iso(),
+        "regular": {
+            "gainers": movers["gainers"],
+            "losers":  movers["losers"],
+        },
+        "stats": movers["stats"],
+    }
+
+
+@app.get("/api/dashboard/best-setups")
+def dashboard_best_setups(
+    limit:     int       = Query(default=5,  ge=1, le=50),
+    min_score: int       = Query(default=70),
+    bands:     str | None = Query(default=None),
+    sector:    str | None = Query(default=None),
+):
+    scan_data, _ = _scanner_get("/api/scans/ultra/latest")
+    if not scan_data or not scan_data.get("has_data"):
+        return {
+            "source":       "scanner-api",
+            "scan_run_id":  None,
+            "generated_at": _now_iso(),
+            "setups":       [],
+            "fallback":     False,
+            "message":      "No best setups found for current scan.",
+        }
+
+    run        = scan_data.get("run", {})
+    total      = run.get("total_candidates") or 0
+    candidates = _fetch_all_candidates(total)
+    bands_list = [b.strip() for b in bands.split(",")] if bands else None
+    result     = _build_setups(candidates, n=limit, min_score=min_score, bands=bands_list, sector=sector)
+
+    return {
+        "source":       "scanner-api",
+        "scan_run_id":  run.get("id"),
+        "generated_at": _now_iso(),
+        "setups":       result["setups"],
+        "fallback":     result["fallback"],
     }
 
 

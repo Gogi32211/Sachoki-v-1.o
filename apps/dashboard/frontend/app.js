@@ -81,28 +81,60 @@ function renderSummary(data) {
   $("sumTf").textContent         = scan.timeframe ?? "—";
 }
 
+// ── Top Movers ────────────────────────────────────────────────────────────────
+function renderMoversList(containerId, movers, isGainer) {
+  const el = $(containerId);
+  if (!movers?.length) {
+    el.innerHTML = `<div class="mover-empty">No change_pct data available.</div>`;
+    return;
+  }
+  el.innerHTML = movers.map((m, i) => {
+    const chg    = m.change_pct;
+    const chgStr = chg != null ? (chg >= 0 ? "+" : "") + fmt(chg, 2) + "%" : "—";
+    const chgCls = chg != null && chg >= 0 ? "pos" : "neg";
+    return `<div class="mover-row">
+      <span class="mover-rank">${i + 1}</span>
+      <span class="mover-sym">${esc(m.symbol)}</span>
+      <span class="mover-sector">${esc(m.sector || "—")}</span>
+      <span class="mover-chg ${chgCls}">${chgStr}</span>
+      <span class="mover-score">${m.ultra_score ?? "—"}</span>
+      <span class="chip ${bandClass(m.band)}">${esc(m.band || "—")}</span>
+    </div>`;
+  }).join("");
+}
+
+function renderMovers(topMovers) {
+  const regular = topMovers?.regular ?? {};
+  renderMoversList("gainersTable", regular.gainers ?? [], true);
+  renderMoversList("losersTable",  regular.losers  ?? [], false);
+}
+
 // ── Best setups ───────────────────────────────────────────────────────────────
 function renderSetups(setups) {
   if (!setups?.length) {
-    $("setupsRow").innerHTML = `<span style="color:var(--text-dim);font-size:.82rem">No setups available.</span>`;
+    $("setupsRow").innerHTML = `<span style="color:var(--text-dim);font-size:.82rem">No best setups found for current scan.</span>`;
     return;
   }
   $("setupsRow").innerHTML = setups.map(s => {
-    const whyItems = (s.why_selected ?? []).slice(0, 4)
+    const reasons   = (s.setup_reason ?? s.why_selected ?? []).slice(0, 4)
       .map(w => `<li>${esc(w)}</li>`).join("");
     const riskChips = (s.risk_flags ?? []).slice(0, 2)
       .map(r => `<span class="chip risk">${esc(r)}</span>`).join("");
+    const chg    = s.change_pct;
+    const chgStr = chg != null ? (chg >= 0 ? "+" : "") + fmt(chg, 2) + "%" : null;
+    const chgCls = chg != null && chg >= 0 ? "pos" : "neg";
     return `
     <div class="setup-card">
       <div class="s-sym">${esc(s.symbol)}</div>
-      <div class="s-sector">${esc(s.sector || "—")}</div>
+      <div class="s-sector">${esc(s.sector || "—")}${s.industry ? ` · ${esc(s.industry)}` : ""}</div>
       <div class="score-row">
         <span class="score-num">${s.ultra_score ?? "—"}</span>
         <span class="chip ${bandClass(s.band)}">${esc(s.band || "—")}</span>
         ${s.final_signal ? `<span class="chip signal">${esc(s.final_signal)}</span>` : ""}
+        ${chgStr ? `<span class="td-chg ${chgCls}" style="font-size:.75rem;margin-left:4px">${chgStr}</span>` : ""}
       </div>
       ${riskChips ? `<div style="margin-bottom:4px">${riskChips}</div>` : ""}
-      <ul class="why-list">${whyItems}</ul>
+      <ul class="why-list">${reasons}</ul>
     </div>`;
   }).join("");
 }
@@ -211,6 +243,7 @@ function render(data) {
   renderCmdBar(data);
   renderStateBanner(data);
   renderSummary(data);
+  renderMovers(data.top_movers ?? {});
   renderSetups(data.best_setups ?? []);
   renderDistribution(data);
   populateSectorFilter(_allCandidates);

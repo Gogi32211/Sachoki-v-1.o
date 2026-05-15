@@ -11,7 +11,7 @@
   <!-- ── Command bar ── -->
   <header class="cmdbar">
     <span class="cmdbar-brand">Sachoki Dashboard</span>
-    <span class="cmdbar-phase">Preview v2 · Phase 6A</span>
+    <span class="cmdbar-phase">Preview v2 · Phase 8A-P1</span>
     <div class="cmdbar-meta">
       <span id="cmScanner">Scanner: —</span>
       <span class="sep">|</span>
@@ -48,6 +48,19 @@
       <div class="card"><div class="c-label">Bands</div><div class="c-value" id="sumBandCount">—</div><div class="c-sub">active bands</div></div>
       <div class="card"><div class="c-label">Sectors</div><div class="c-value" id="sumSectorCount">—</div><div class="c-sub">covered</div></div>
       <div class="card"><div class="c-label">Universe</div><div class="c-value" id="sumUniverse" style="font-size:.9rem;padding-top:4px">—</div><div class="c-sub" id="sumTf">—</div></div>
+    </div>
+
+    <!-- Top Movers -->
+    <div class="section-label">Top Movers</div>
+    <div class="movers-row">
+      <div class="movers-box">
+        <div class="m-title gain-title">Top Gainers</div>
+        <div id="gainersTable"></div>
+      </div>
+      <div class="movers-box">
+        <div class="m-title loss-title">Top Losers</div>
+        <div id="losersTable"></div>
+      </div>
     </div>
 
     <!-- Best setups -->
