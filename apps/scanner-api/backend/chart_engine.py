@@ -19,6 +19,7 @@ from .chart_wlnbb_engine import compute_wlnbb as _compute_wlnbb
 from .chart_vabs_engine import compute_vabs as _compute_vabs, VABS_SIG_COLS
 from .chart_wick_engine import compute_wick as _compute_wick, WICK_SIG_COLS
 from .chart_combo_engine import compute_combo as _compute_combo, COMBO_SIG_COLS, COMBO_PREUP_COLS
+from .engine_registry import run_engines as _run_engines
 
 log = logging.getLogger(__name__)
 
@@ -335,9 +336,10 @@ def get_chart_score(symbol: str, tf: str = "1d") -> dict:
 def get_chart_history(symbol: str, tf: str = "1d", lookback: int = 60) -> dict:
     """
     Historical per-bar signal timeline for the Super Chart History view.
-    Reuses _fetch_for_chart → compute_tz + compute_wlnbb → group signals.
-    Returns bars sorted oldest → newest (left-to-right timeline).
-    No scoring per bar — only OHLCV, T/Z, WLNBB, RSI, CCI.
+
+    Phase 8G commit 2: this endpoint now consumes the unified engine_registry
+    output. Chart history no longer runs its own engines independently — it
+    flattens the normalized scanner bars into the legacy history-row shape.
     """
     sym  = symbol.upper().strip()
     bars = min(max(lookback, 10), 120)
@@ -347,75 +349,50 @@ def get_chart_history(symbol: str, tf: str = "1d", lookback: int = 60) -> dict:
         return {
             "ok": False, "ticker": sym, "timeframe": tf, "lookback": bars,
             "bars": [],
-            "meta": {"source": "massive-computed", "generated_at": _now_iso(),
+            "meta": {"source": "unified_scanner_engine_pipeline",
+                     "generated_at": _now_iso(),
+                     "engines_enabled": [], "engines_failed": [],
                      "warning": f"no data returned for {sym} ({tf})"},
         }
 
-    try:
-        tz_df   = _compute_tz(df)
-        wl_df   = _compute_wlnbb(df)
-    except Exception as exc:
-        log.warning("History TZ/WLNBB compute error for %s: %s", sym, exc)
+    all_bars = _run_engines(ticker=sym, timeframe=tf, df=df)
+    if not all_bars:
         return {
             "ok": False, "ticker": sym, "timeframe": tf, "lookback": bars,
             "bars": [],
-            "meta": {"source": "massive-computed", "generated_at": _now_iso(),
-                     "warning": "signal computation failed"},
+            "meta": {"source": "unified_scanner_engine_pipeline",
+                     "generated_at": _now_iso(),
+                     "engines_enabled": [], "engines_failed": [],
+                     "warning": "engine pipeline returned no bars"},
         }
 
-    # Phase 8F-A: compute extra engines defensively — failures degrade gracefully
-    try:
-        vabs_df = _compute_vabs(df)
-    except Exception as exc:
-        log.warning("History VABS compute error for %s: %s", sym, exc)
-        vabs_df = pd.DataFrame(index=df.index)
-
-    try:
-        wick_df = _compute_wick(df)
-    except Exception as exc:
-        log.warning("History WICK compute error for %s: %s", sym, exc)
-        wick_df = pd.DataFrame(index=df.index)
-
-    try:
-        combo_df = _compute_combo(df)
-    except Exception as exc:
-        log.warning("History COMBO compute error for %s: %s", sym, exc)
-        combo_df = pd.DataFrame(index=df.index)
-
-    combined = pd.concat([df, tz_df, wl_df], axis=1)
-    combined = combined.iloc[-bars:] if len(combined) > bars else combined
+    sliced = all_bars[-bars:] if len(all_bars) > bars else all_bars
+    last_debug = sliced[-1].get("engine_debug", {}) if sliced else {}
 
     out_bars: list[dict] = []
-    for ts, row in combined.iterrows():
-        date_str = _ts_to_date(ts)
-        tz_row    = tz_df.loc[ts]    if ts in tz_df.index    else pd.Series(dtype=object)
-        wl_row    = wl_df.loc[ts]    if ts in wl_df.index    else pd.Series(dtype=object)
-        vabs_row  = vabs_df.loc[ts]  if ts in vabs_df.index  else pd.Series(dtype=object)
-        wick_row  = wick_df.loc[ts]  if ts in wick_df.index  else pd.Series(dtype=object)
-        combo_row = combo_df.loc[ts] if ts in combo_df.index else pd.Series(dtype=object)
-
-        sigs       = _active_signals(tz_row, wl_row)
-        extra_sigs = _active_extra_signals(vabs_row, wick_row, combo_row)
-        all_sigs   = sigs + extra_sigs
-        vol_bucket = str(wl_row.get("vol_bucket", row.get("vol_bucket", "")))
-        groups     = _group_signals(all_sigs, vol_bucket)
-
-        close_val = float(row["close"]) if not pd.isna(row["close"]) else None
-        rsi_val   = float(wl_row.get("rsi", row.get("rsi", None)) or 0) or None
-        cci_val   = float(wl_row.get("cci_sma", row.get("cci_sma", None)) or 0) or None
-
+    for bar in sliced:
+        ohlcv = bar.get("ohlcv") or {}
+        ind   = bar.get("indicators") or {}
         out_bars.append({
-            "date":         date_str,
-            "display_date": date_str[5:],   # MM-DD
-            "datetime":     f"{date_str}T00:00:00",
-            "close":        round(close_val, 4) if close_val is not None else None,
-            "rsi":          round(rsi_val, 2)   if rsi_val  is not None else None,
-            "cci":          round(cci_val, 2)   if cci_val  is not None else None,
-            "score":        None,   # no per-bar scoring
-            "turbo":        None,
-            "rtb":          None,
-            "category":     None,
-            "signals":      groups,
+            "date":         bar.get("date"),
+            "display_date": bar.get("display_date"),
+            "datetime":     bar.get("datetime"),
+            "close":        _round(ohlcv.get("close"), 4),
+            "rsi":          _round(ind.get("rsi"), 2),
+            "cci":          _round(ind.get("cci"), 2),
+            # Per-bar scoring is plumbed via the normalized scores dict; we
+            # surface the headline values flat for back-compat with the existing
+            # frontend table.
+            "score":        (bar.get("scores") or {}).get("ultra_score"),
+            "turbo":        (bar.get("scores") or {}).get("turbo_score"),
+            "rtb":          (bar.get("scores") or {}).get("rtb_phase"),
+            "category":     (bar.get("scores") or {}).get("category"),
+            "signals":      bar.get("signals") or {},
+            "scores":       bar.get("scores") or {},
+            "roles":        bar.get("roles") or {},
+            "split":        bar.get("split") or {},
+            "ohlcv":        ohlcv,
+            "indicators":   ind,
         })
 
     return {
@@ -425,11 +402,22 @@ def get_chart_history(symbol: str, tf: str = "1d", lookback: int = 60) -> dict:
         "lookback":  bars,
         "bars":      out_bars,
         "meta": {
-            "source":       "massive-computed",
-            "generated_at": _now_iso(),
-            "warning":      None,
+            "source":          "unified_scanner_engine_pipeline",
+            "generated_at":    _now_iso(),
+            "engines_enabled": last_debug.get("engines_ran", []),
+            "engines_failed":  last_debug.get("engines_failed", []),
+            "warning":         None,
         },
     }
+
+
+def _round(v, ndigits: int):
+    if v is None:
+        return None
+    try:
+        return round(float(v), ndigits)
+    except (TypeError, ValueError):
+        return None
 
 
 def get_chart_snapshot(symbol: str, tf: str = "1d", bars: int = 150) -> dict:
