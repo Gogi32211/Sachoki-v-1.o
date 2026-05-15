@@ -1,10 +1,10 @@
 """
-scanner-api — Phase 5B: bounded manual scan system.
+scanner-api — Phase 5C: async bounded scan with Redis progress.
 
-Upgrades controlled scan: max 100 symbols, dry_run validation, per-symbol
-error handling, summary_json, sample lists, richer status endpoint.
+POST /api/scans/ultra/run starts scan in background (BackgroundTasks),
+returns run_id immediately. Progress tracked in Redis (in-memory fallback).
+Max 500 symbols. Cancel endpoint added. DB remains source of truth.
 Scheduler and full-market scan remain disabled.
-score_engine: temporary_phase_5A
 """
 from __future__ import annotations
 
@@ -16,17 +16,17 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "info").upper())
 
-app = FastAPI(title="scanner-api", version="0.6.0")
+app = FastAPI(title="scanner-api", version="0.7.0")
 
-_VERSION = "0.6.0"
-_PHASE   = "5B-bounded-scan"
+_VERSION = "0.7.0"
+_PHASE   = "5C-async-scan"
 
 # Known Ultra Scan table names (confirmed from backend/ultra_scan_migration.py)
 _RUN_TABLE  = "ultra_scan_runs"
@@ -36,9 +36,12 @@ _CAND_TABLE = "ultra_scan_candidates"
 _SAFE_SORT_COLS = {"ultra_score", "ticker", "created_at"}
 
 # ── Controlled scan config ────────────────────────────────────────────────────
-_MAX_SYMBOLS        = 100
+_MAX_SYMBOLS        = 500
 _ALLOWED_TIMEFRAMES = ["1d"]
-_ALLOWED_UNIVERSES  = {"manual_test", "sp500_sample", "nasdaq_sample", "watchlist_sample"}
+_ALLOWED_UNIVERSES  = {
+    "manual_test", "sp500_sample", "nasdaq_sample",
+    "watchlist_sample", "custom_sample",
+}
 _SCHEDULER_ENABLED  = False
 
 from .scan_engine import DEFAULT_SYMBOLS as _DEFAULT_SYMBOLS  # noqa: E402
@@ -49,34 +52,30 @@ _SP500_SAMPLE: list[str] = [
     "COST","CVX","CRM","BAC","NFLX","AMD","PEP","KO","TMO","WMT",
     "ORCL","ADBE","MCD","ACN","PM","CSCO","ABT","GE","TXN","DHR",
     "CAT","SPGI","MS","AXP","GS","BLK","RTX","HON","LMT","DE",
+    "NOW","ISRG","SYK","PLD","AMT","REGN","VRTX","GILD","BSX","ELV",
+    "MDT","CI","HUM","CVS","MCK","AIG","AFL","PRU","MET","TRV",
+    "SCHW","CME","ICE","NDAQ","CB","AON","MMC","WTW","AJG","BRO",
+    "NEE","SO","DUK","AEP","D","EXC","SRE","XEL","PCG","WEC",
+    "PGR","ANET","FICO","CDNS","ANSS","CTSH","EPAM","LDOS","SAIC","BAH",
 ]
 _NASDAQ_SAMPLE: list[str] = [
     "AAPL","MSFT","NVDA","AMZN","META","TSLA","GOOGL","AVGO","CSCO","ADBE",
     "AMD","TXN","QCOM","INTC","INTU","AMAT","MU","LRCX","KLAC","SNPS",
     "CDNS","MRVL","NXPI","ON","MCHP","PANW","CRWD","DDOG","ZS","NET",
-    "PLTR","SNOW","OKTA","HCP","TEAM","DOCU","ZM","BILL","HUBS","VEEV",
-    "MELI","BKNG","ABNB","DASH","UBER","LYFT","RIVN","LCID","SOFI","COIN",
+    "PLTR","SNOW","OKTA","TEAM","HUBS","VEEV","MELI","BKNG","ABNB","DASH",
+    "UBER","SOFI","COIN","HOOD","AFRM","UPST","OPEN","RDFN","REDFIN","TTD",
+    "ROKU","SPOT","NFLX","WBD","PARA","RBLX","U","SNAP","PINS","APP",
+    "CELH","DKNG","PENN","MGM","WYNN","LVS","CZR","NCLH","CCL","RCL",
+    "MRNA","BNTX","NVAX","SGEN","ALNY","BMRN","RARE","FOLD","ACAD","IONS",
+    "ZM","DOCU","BILL","GTLB","PATH","MDB","ESTC","NCNO","ALRM","ASAN",
+    "FROG","CFLT","BRZE","SMAR","BOX","DRCT","BLZE","GDDY","WIX","SHOP",
 ]
 
-# ── Scan state (in-process, single worker) ────────────────────────────────────
-_scan_lock  = threading.Lock()
-_scan_state: dict[str, Any] = {
-    "running":          False,
-    "run_id":           None,
-    "latest_status":    None,
-    "universe":         None,
-    "timeframe":        None,
-    "last_started_at":  None,
-    "last_finished_at": None,
-    "symbols_requested":0,
-    "symbols_scanned":  0,
-    "symbols_failed":   0,
-    "candidates_saved": 0,
-    "total_symbols":    0,
-    "current_symbol":   None,
-    "duration_seconds": None,
-    "error":            None,
-}
+# ── Concurrency control ───────────────────────────────────────────────────────
+_scan_lock      = threading.Lock()   # guards _scan_running + _current_run_id
+_scan_running   = False
+_current_run_id: int | None = None
+_cancel_event   = threading.Event()  # set to request cancel between symbols
 
 
 class ScanRequest(BaseModel):
@@ -94,7 +93,7 @@ class ScanRequest(BaseModel):
         if not cleaned:
             raise ValueError("symbols list must not be empty.")
         if len(cleaned) > _MAX_SYMBOLS:
-            raise ValueError(f"Phase 5B controlled scan allows max {_MAX_SYMBOLS} symbols.")
+            raise ValueError(f"Phase 5C controlled async scan allows max {_MAX_SYMBOLS} symbols.")
         return cleaned
 
     @field_validator("timeframe")
@@ -110,7 +109,7 @@ class ScanRequest(BaseModel):
         if v not in _ALLOWED_UNIVERSES:
             raise ValueError(
                 f"universe must be one of: {sorted(_ALLOWED_UNIVERSES)}. "
-                "Full-market universes (full_sp500, full_nasdaq, all_us) are not allowed in Phase 5B."
+                "Full-market universes (full_sp500, full_nasdaq, all_us) are not allowed."
             )
         return v
 
@@ -254,20 +253,30 @@ def debug_status():
         except Exception as exc:
             log.warning("debug/status DB probe: %s", exc)
 
+    from . import progress as _prog
+
+    with _scan_lock:
+        is_running  = _scan_running
+        running_rid = _current_run_id
+
     return {
         "service":                        "scanner-api",
-        "mode":                           "controlled_scan_phase",
+        "mode":                           "async_controlled_scan_phase",
         "database_configured":            db_configured,
         "database_connected":             db_connected,
         "database_error":                 db_error or None,
         "redis_configured":               bool(os.getenv("REDIS_URL")),
+        "redis_progress_available":       _prog.redis_available(),
         "massive_configured":             bool(os.getenv("MASSIVE_API_KEY")),
+        "async_scan_available":           True,
         "scan_execution_available":       True,
         "controlled_scan_max_symbols":    _MAX_SYMBOLS,
         "allowed_universes":              sorted(_ALLOWED_UNIVERSES),
         "scanning_enabled":               False,
         "scheduler_enabled":              _SCHEDULER_ENABLED,
         "full_market_scan_enabled":       False,
+        "running_scan":                   is_running,
+        "running_run_id":                 running_rid,
         "latest_ultra_scan_found":        latest_scan_found,
         "latest_ultra_scan_id":           latest_scan_id,
         "latest_ultra_candidate_count":   latest_candidate_count,
@@ -587,7 +596,7 @@ def _synthetic_row(i: int, ticker: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Controlled scan endpoints (Phase 5A)
+# Controlled scan — DB helpers (Phase 5C async refactor)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_summary_json(scan_result: dict) -> dict:
@@ -618,58 +627,79 @@ def _build_summary_json(scan_result: dict) -> dict:
     }
 
 
-def _persist_scan_results(scan_result: dict, replace_latest: bool) -> tuple[int, str]:
+def _create_run_record(
+    universe: str, timeframe: str, scan_mode: str,
+    symbols_count: int, started_at: datetime,
+) -> int:
+    """Insert a scan run with status='running'. Returns run_id."""
+    from . import db as _db
+    import psycopg2.extras
+
+    with _db.get_write_conn() as conn:
+        with conn.cursor(cursor_factory=__import__("psycopg2").extras.RealDictCursor) as cur:
+            cur.execute(
+                f"""INSERT INTO {_RUN_TABLE}
+                    (universe, tf, nasdaq_batch, status, is_latest,
+                     total_candidates, sources_json, warnings_json, meta_json,
+                     started_at, finished_at)
+                   VALUES (%s,%s,%s,'running',FALSE,0,%s,%s,%s,%s,NULL)
+                   RETURNING id""",
+                (
+                    universe, timeframe, scan_mode,
+                    json.dumps({"source": "scanner-api-async-scan"}),
+                    json.dumps([]),
+                    json.dumps({"phase": _PHASE, "symbols_count": symbols_count}),
+                    started_at.isoformat(),
+                ),
+            )
+            run_id = cur.fetchone()["id"]
+        conn.commit()
+    return run_id
+
+
+def _finalize_run(run_id: int, scan_result: dict, replace_latest: bool) -> str:
     """
-    Write scan to DB. Returns (run_id, final_status).
-    If zero candidates: marks run as 'failed', keeps old latest intact.
-    Safe latest replacement: old latest only flipped after new run succeeds.
+    Update run status, insert candidates, flip is_latest if success.
+    Returns final status string.
     """
     from . import db as _db
     import psycopg2.extras
 
-    universe   = scan_result["universe"]
-    timeframe  = scan_result["timeframe"]
-    scan_mode  = scan_result["scan_mode"]
-    started    = scan_result["started_at"]
-    finished   = datetime.now(timezone.utc).isoformat()
-    candidates = scan_result["results"]
-    all_failed = len(candidates) == 0
-    final_status = "failed" if all_failed else "completed"
+    candidates   = scan_result["results"]
+    cancelled    = scan_result.get("cancelled", False)
+    all_failed   = len(candidates) == 0
+    final_status = ("cancelled" if cancelled else
+                    "failed"    if all_failed else
+                    "completed")
 
-    summary = _build_summary_json(scan_result)
-    meta = {
-        "score_engine":      scan_result["score_engine"],
-        "elapsed_ms":        scan_result["elapsed_ms"],
-        "symbols_requested": scan_result["symbols_requested"],
-        "phase":             _PHASE,
-    }
+    summary  = _build_summary_json(scan_result)
     warnings = [f"{e['symbol']}: {e['error']}" for e in scan_result["errors"]]
+    meta     = {
+        "score_engine":      scan_result.get("score_engine", ""),
+        "elapsed_ms":        scan_result.get("elapsed_ms", 0),
+        "symbols_requested": scan_result.get("symbols_requested", 0),
+        "symbols_failed":    scan_result.get("symbols_failed", 0),
+        "phase":             _PHASE,
+        "summary":           summary,
+    }
 
     with _db.get_write_conn() as conn:
         with conn.cursor(cursor_factory=__import__("psycopg2").extras.RealDictCursor) as cur:
 
-            # 1 — create run row (never latest until success confirmed)
             cur.execute(
-                f"""
-                INSERT INTO {_RUN_TABLE}
-                  (universe, tf, nasdaq_batch, status, is_latest,
-                   total_candidates, sources_json, warnings_json, meta_json,
-                   started_at, finished_at)
-                VALUES (%s,%s,%s,%s,FALSE,%s,%s,%s,%s,%s,%s)
-                RETURNING id
-                """,
+                f"""UPDATE {_RUN_TABLE} SET
+                    status=%s, total_candidates=%s,
+                    warnings_json=%s, meta_json=%s, finished_at=%s
+                    WHERE id=%s""",
                 (
-                    universe, timeframe, scan_mode, final_status,
-                    len(candidates),
-                    json.dumps({"source": "scanner-api-controlled-scan"}),
+                    final_status, len(candidates),
                     json.dumps(warnings),
-                    json.dumps({**meta, "summary": summary}),
-                    started, finished,
+                    json.dumps(meta),
+                    datetime.now(timezone.utc).isoformat(),
+                    run_id,
                 ),
             )
-            run_id = cur.fetchone()["id"]
 
-            # 2 — insert candidates
             if candidates:
                 rows = [
                     (run_id, c["symbol"], float(c["ultra_score"]), json.dumps(c))
@@ -682,11 +712,10 @@ def _persist_scan_results(scan_result: dict, replace_latest: bool) -> tuple[int,
                     rows, page_size=50,
                 )
 
-            # 3 — safe latest flip (only if scan succeeded with candidates)
-            if replace_latest and not all_failed:
+            # Only flip latest on clean completion with candidates
+            if replace_latest and final_status == "completed":
                 cur.execute(
-                    f"UPDATE {_RUN_TABLE} SET is_latest=FALSE "
-                    "WHERE is_latest=TRUE AND id<>%s",
+                    f"UPDATE {_RUN_TABLE} SET is_latest=FALSE WHERE is_latest=TRUE AND id<>%s",
                     (run_id,),
                 )
                 cur.execute(
@@ -696,20 +725,116 @@ def _persist_scan_results(scan_result: dict, replace_latest: bool) -> tuple[int,
 
         conn.commit()
 
-    return run_id, final_status
+    return final_status
+
+
+def _run_scan_background(
+    run_id:     int,
+    symbols:    list[str],
+    req:        ScanRequest,
+    started_at: datetime,
+) -> None:
+    """
+    Background scan worker — runs in FastAPI's thread pool.
+    Updates Redis/memory progress after each symbol.
+    Finalizes DB run on completion, failure, or cancellation.
+    """
+    global _scan_running, _current_run_id
+
+    from . import progress as _prog
+    from .scan_engine import run_controlled_scan
+
+    total = len(symbols)
+
+    def _on_progress(i: int, sym: str, results: list, errors: list) -> None:
+        _prog.set_progress(run_id, {
+            "run_id":            run_id,
+            "status":            "running",
+            "universe":          req.universe,
+            "timeframe":         req.timeframe,
+            "symbols_requested": total,
+            "symbols_scanned":   len(results),
+            "symbols_failed":    len(errors),
+            "candidates_saved":  len(results),
+            "current_symbol":    sym,
+            "started_at":        started_at.isoformat(),
+            "progress_pct":      round(i / total * 100, 1) if total else 0,
+            "error":             None,
+        })
+
+    try:
+        scan_result = run_controlled_scan(
+            symbols=symbols,
+            timeframe=req.timeframe,
+            universe=req.universe,
+            scan_mode=req.scan_mode,
+            progress_callback=_on_progress,
+            cancel_event=_cancel_event,
+        )
+
+        if _cancel_event.is_set():
+            _cancel_event.clear()
+
+        final_status = _finalize_run(run_id, scan_result, req.replace_latest)
+        elapsed = round((datetime.now(timezone.utc) - started_at).total_seconds(), 1)
+
+        _prog.set_progress(run_id, {
+            "run_id":            run_id,
+            "status":            final_status,
+            "universe":          req.universe,
+            "timeframe":         req.timeframe,
+            "symbols_requested": scan_result["symbols_requested"],
+            "symbols_scanned":   scan_result["symbols_scanned"],
+            "symbols_failed":    scan_result["symbols_failed"],
+            "candidates_saved":  scan_result["candidates_saved"],
+            "current_symbol":    None,
+            "started_at":        started_at.isoformat(),
+            "finished_at":       datetime.now(timezone.utc).isoformat(),
+            "duration_seconds":  elapsed,
+            "progress_pct":      100.0 if final_status == "completed" else None,
+            "error":             ("All symbols failed — previous latest preserved."
+                                  if final_status == "failed" else None),
+        })
+        log.info("Background scan done: run_id=%d status=%s candidates=%d failed=%d elapsed=%.1fs",
+                 run_id, final_status, scan_result["symbols_scanned"],
+                 scan_result["symbols_failed"], elapsed)
+
+    except Exception as exc:
+        log.exception("Background scan error: run_id=%d", run_id)
+        try:
+            from . import db as _db
+            with _db.get_write_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"UPDATE {_RUN_TABLE} SET status='failed', finished_at=%s WHERE id=%s",
+                        (datetime.now(timezone.utc).isoformat(), run_id),
+                    )
+                conn.commit()
+        except Exception:
+            pass
+        from . import progress as _prog
+        _prog.set_progress(run_id, {
+            "run_id": run_id, "status": "failed",
+            "error": type(exc).__name__,
+        })
+    finally:
+        with _scan_lock:
+            _scan_running   = False
+            _current_run_id = None
 
 
 @app.post("/api/scans/ultra/run")
-def run_ultra_scan(req: ScanRequest):
+def run_ultra_scan(req: ScanRequest, background_tasks: BackgroundTasks):
     """
-    Trigger a bounded controlled Ultra scan. Max 100 symbols. Synchronous.
-    dry_run=true validates without fetching candles or writing DB.
+    Start a bounded async controlled Ultra scan. Max 500 symbols.
+    dry_run=true validates without fetching or writing.
+    Returns run_id immediately; scan runs in background.
     """
-    global _scan_state
+    global _scan_running, _current_run_id
 
     symbols = req.symbols or _DEFAULT_SYMBOLS
 
-    # ── Dry run — validate only, no candles, no DB ────────────────────────────
+    # ── Dry run ───────────────────────────────────────────────────────────────
     if req.dry_run:
         return {
             "dry_run":      True,
@@ -723,155 +848,182 @@ def run_ultra_scan(req: ScanRequest):
             "max_symbols":  _MAX_SYMBOLS,
         }
 
-    if not _scan_lock.acquire(blocking=False):
-        return JSONResponse(
-            status_code=409,
-            content={"accepted": False, "error": "A scan is already running. Try again shortly."},
-        )
-
-    t_start = datetime.now(timezone.utc)
+    # ── Concurrency check ─────────────────────────────────────────────────────
+    with _scan_lock:
+        if _scan_running:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "accepted":       False,
+                    "error":          "Another Ultra scan is already running.",
+                    "running_run_id": _current_run_id,
+                },
+            )
+        _scan_running = True
 
     try:
         from . import db as _db
-        from .scan_engine import run_controlled_scan
+        from . import progress as _prog
 
         if not _db.DATABASE_URL:
+            with _scan_lock:
+                _scan_running = False
             return JSONResponse(
                 status_code=503,
                 content={"accepted": False, "error": "DATABASE_URL not configured"},
             )
 
-        _scan_state.update({
-            "running": True, "run_id": None, "error": None,
-            "universe": req.universe, "timeframe": req.timeframe,
-            "symbols_requested": len(symbols),
-            "total_symbols": len(symbols), "symbols_scanned": 0,
-            "symbols_failed": 0, "candidates_saved": 0,
-            "current_symbol": symbols[0] if symbols else None,
-            "last_started_at": t_start.isoformat(),
-            "duration_seconds": None,
-        })
-
-        log.info("Phase 5B scan: %d symbols tf=%s universe=%s",
-                 len(symbols), req.timeframe, req.universe)
-
-        scan_result = run_controlled_scan(
-            symbols=symbols,
-            timeframe=req.timeframe,
+        started_at = datetime.now(timezone.utc)
+        run_id = _create_run_record(
             universe=req.universe,
+            timeframe=req.timeframe,
             scan_mode=req.scan_mode,
+            symbols_count=len(symbols),
+            started_at=started_at,
         )
 
-        _scan_state.update({
-            "symbols_scanned": scan_result["symbols_scanned"],
-            "symbols_failed":  scan_result["symbols_failed"],
-            "candidates_saved":scan_result["candidates_saved"],
-            "current_symbol":  None,
+        with _scan_lock:
+            _current_run_id = run_id
+
+        # Seed initial progress
+        _prog.set_progress(run_id, {
+            "run_id":            run_id,
+            "status":            "running",
+            "universe":          req.universe,
+            "timeframe":         req.timeframe,
+            "symbols_requested": len(symbols),
+            "symbols_scanned":   0,
+            "symbols_failed":    0,
+            "candidates_saved":  0,
+            "current_symbol":    symbols[0] if symbols else None,
+            "started_at":        started_at.isoformat(),
+            "progress_pct":      0.0,
+            "error":             None,
         })
 
-        run_id, final_status = _persist_scan_results(scan_result, req.replace_latest)
+        background_tasks.add_task(_run_scan_background, run_id, symbols, req, started_at)
 
-        duration = round((datetime.now(timezone.utc) - t_start).total_seconds(), 1)
-        finished = datetime.now(timezone.utc).isoformat()
-        _scan_state.update({
-            "running": False, "run_id": run_id,
-            "latest_status": final_status,
-            "last_finished_at": finished,
-            "duration_seconds": duration,
-            "error": "All symbols failed — previous latest preserved." if final_status == "failed" else None,
-        })
-
-        log.info("Phase 5B scan done: run_id=%d status=%s candidates=%d failed=%d",
-                 run_id, final_status, scan_result["symbols_scanned"], scan_result["symbols_failed"])
-
-        msg = ("Controlled scan completed." if final_status == "completed"
-               else "All symbols failed — run saved as failed, previous latest preserved.")
+        log.info("Phase 5C async scan started: run_id=%d symbols=%d universe=%s",
+                 run_id, len(symbols), req.universe)
 
         return {
             "accepted":          True,
             "run_id":            run_id,
-            "status":            final_status,
-            "symbols_requested": scan_result["symbols_requested"],
-            "symbols_scanned":   scan_result["symbols_scanned"],
-            "symbols_failed":    scan_result["symbols_failed"],
-            "candidates_saved":  scan_result["candidates_saved"],
-            "errors":            scan_result["errors"],
-            "elapsed_ms":        scan_result["elapsed_ms"],
-            "duration_seconds":  duration,
-            "score_engine":      scan_result["score_engine"],
-            "message":           msg,
+            "status":            "running",
+            "symbols_requested": len(symbols),
+            "universe":          req.universe,
+            "timeframe":         req.timeframe,
+            "message":           "Controlled Ultra scan started.",
         }
 
-    except ValueError as exc:
-        _scan_state.update({"running": False, "error": str(exc)})
-        return JSONResponse(status_code=400, content={"accepted": False, "error": str(exc)})
     except Exception as exc:
-        log.exception("run_ultra_scan error")
-        _scan_state.update({"running": False, "error": type(exc).__name__,
-                            "latest_status": "failed"})
+        with _scan_lock:
+            _scan_running   = False
+            _current_run_id = None
+        log.exception("run_ultra_scan setup error")
         return JSONResponse(status_code=500,
                             content={"accepted": False, "error": type(exc).__name__})
-    finally:
-        _scan_lock.release()
 
 
 @app.get("/api/scans/ultra/status")
-def ultra_scan_status():
-    """Return current or last scan execution state."""
+def ultra_scan_status(run_id: int | None = Query(default=None)):
+    """
+    Return scan progress/status.
+    run_id: specific run (defaults to latest running or most recent).
+    """
     from . import db as _db
+    from . import progress as _prog
 
+    # ── Determine which run_id to inspect ────────────────────────────────────
+    target_id = run_id
+    if target_id is None:
+        with _scan_lock:
+            target_id = _current_run_id  # running scan takes priority
+
+    # ── Try progress store first (live data) ─────────────────────────────────
+    if target_id is not None:
+        prog = _prog.get_progress(target_id)
+        if prog:
+            running = prog.get("status") == "running"
+            out = {**prog, "running": running}
+            if running:
+                total = prog.get("symbols_requested", 0)
+                scanned = prog.get("symbols_scanned", 0)
+                out["progress_pct"] = round(scanned / total * 100, 1) if total else 0
+            return out
+
+    # ── Fallback to DB ────────────────────────────────────────────────────────
     db_row: dict = {}
     if _db.DATABASE_URL:
         try:
             with _db.get_conn() as cur:
-                cur.execute(
-                    f"""SELECT id, universe, tf, status, total_candidates,
-                               started_at, finished_at
-                        FROM {_RUN_TABLE} ORDER BY id DESC LIMIT 1"""
-                )
+                if target_id is not None:
+                    cur.execute(
+                        f"SELECT id, universe, tf, status, total_candidates, started_at, finished_at "
+                        f"FROM {_RUN_TABLE} WHERE id=%s",
+                        (target_id,),
+                    )
+                else:
+                    cur.execute(
+                        f"SELECT id, universe, tf, status, total_candidates, started_at, finished_at "
+                        f"FROM {_RUN_TABLE} ORDER BY id DESC LIMIT 1"
+                    )
                 row = cur.fetchone()
                 if row:
                     db_row = dict(row)
         except Exception:
             pass
 
-    state = dict(_scan_state)
+    if not db_row:
+        return {"running": False, "run_id": None, "status": None, "error": "No scan found"}
 
-    if state["running"]:
-        return {
-            "running":           True,
-            "run_id":            state["run_id"],
-            "status":            "running",
-            "universe":          state["universe"],
-            "timeframe":         state["timeframe"],
-            "symbols_requested": state["symbols_requested"],
-            "symbols_scanned":   state["symbols_scanned"],
-            "symbols_failed":    state["symbols_failed"],
-            "current_symbol":    state["current_symbol"],
-            "started_at":        state["last_started_at"],
-            "error":             None,
-        }
+    st = db_row.get("status")
+    fa = db_row.get("finished_at")
+    sa = db_row.get("started_at")
+    duration = None
+    if sa and fa:
+        try:
+            duration = round((fa - sa).total_seconds(), 1)
+        except Exception:
+            pass
 
     return {
-        "running":           False,
+        "running":           st == "running",
         "run_id":            db_row.get("id"),
-        "status":            db_row.get("status"),
+        "status":            st,
         "universe":          db_row.get("universe"),
         "timeframe":         db_row.get("tf"),
-        "symbols_requested": state["symbols_requested"],
-        "symbols_scanned":   state["symbols_scanned"],
-        "symbols_failed":    state["symbols_failed"],
+        "symbols_requested": None,
+        "symbols_scanned":   None,
+        "symbols_failed":    None,
         "candidates_saved":  db_row.get("total_candidates") or 0,
         "current_symbol":    None,
-        "started_at":        str(db_row["started_at"]) if db_row.get("started_at") else state["last_started_at"],
-        "finished_at":       str(db_row["finished_at"]) if db_row.get("finished_at") else state["last_finished_at"],
-        "duration_seconds":  state["duration_seconds"],
-        "error":             state["error"],
+        "started_at":        str(sa) if sa else None,
+        "finished_at":       str(fa) if fa else None,
+        "duration_seconds":  duration,
+        "error":             None,
+    }
+
+
+@app.post("/api/scans/ultra/cancel")
+def cancel_ultra_scan():
+    """Request cancellation of the currently running scan."""
+    with _scan_lock:
+        if not _scan_running:
+            return {"cancelled": False, "message": "No scan is currently running."}
+        run_id = _current_run_id
+
+    _cancel_event.set()
+    return {
+        "cancelled":        True,
+        "run_id":           run_id,
+        "message":          "Cancel requested. Scan will stop after current symbol completes.",
     }
 
 
 @app.get("/api/debug/scan-config")
 def debug_scan_config():
+    from . import progress as _prog
     return {
         "phase":                    _PHASE,
         "max_symbols":              _MAX_SYMBOLS,
@@ -880,11 +1032,15 @@ def debug_scan_config():
         "default_symbols":          _DEFAULT_SYMBOLS,
         "scheduler_enabled":        _SCHEDULER_ENABLED,
         "full_market_scan_enabled": False,
+        "async_scan":               True,
+        "redis_progress":           _prog.redis_available(),
         "score_engine":             "temporary_phase_5A",
         "notes": [
-            "Phase 5B: bounded manual scan, max 100 symbols.",
+            "Phase 5C: async bounded scan, max 500 symbols.",
+            "Scan starts immediately and runs in background.",
+            "Poll GET /api/scans/ultra/status?run_id=<id> for progress.",
             "dry_run=true validates without fetching or writing.",
-            "Scores are temporary_phase_5A — not production Ultra scores.",
+            "POST /api/scans/ultra/cancel to request stop.",
             "Scheduler remains disabled.",
         ],
     }
@@ -897,6 +1053,7 @@ def ultra_sample_lists():
         "sp500_sample":    _SP500_SAMPLE,
         "nasdaq_sample":   _NASDAQ_SAMPLE,
         "watchlist_sample":[],
+        "custom_sample":   [],
         "max_symbols":     _MAX_SYMBOLS,
     }
 

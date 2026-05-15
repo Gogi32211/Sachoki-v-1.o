@@ -294,22 +294,40 @@ def score_candidate(symbol: str, signals: dict) -> dict:
 # ── Main scan ─────────────────────────────────────────────────────────────────
 
 def run_controlled_scan(
-    symbols:   list[str],
-    timeframe: str = "1d",
-    universe:  str = "manual_test",
-    scan_mode: str = "controlled_test",
+    symbols:           list[str],
+    timeframe:         str  = "1d",
+    universe:          str  = "manual_test",
+    scan_mode:         str  = "controlled_test",
+    progress_callback  = None,  # callable(i, sym, results, errors) → None
+    cancel_event       = None,  # threading.Event; checked between symbols
 ) -> dict:
     """
     Run a controlled scan for the given symbol list via Massive API.
     Returns results dict — caller is responsible for DB writes.
+    progress_callback is called before each symbol with current counts.
+    cancel_event is checked between symbols; sets result["cancelled"]=True if fired.
     """
     started = datetime.now(timezone.utc)
     t0 = time.monotonic()
 
     results: list[dict] = []
     errors:  list[dict] = []
+    cancelled = False
 
-    for symbol in symbols:
+    for i, symbol in enumerate(symbols):
+        # ── Cancel check ──────────────────────────────────────────────────────
+        if cancel_event and cancel_event.is_set():
+            log.info("Scan cancel_event set at symbol %d/%d — stopping.", i, len(symbols))
+            cancelled = True
+            break
+
+        # ── Progress callback ─────────────────────────────────────────────────
+        if progress_callback:
+            try:
+                progress_callback(i, symbol, results, errors)
+            except Exception:
+                pass
+
         sym = symbol.upper().strip()
         try:
             df = fetch_bars(sym, interval=timeframe)
@@ -344,4 +362,5 @@ def run_controlled_scan(
         "universe":          universe,
         "timeframe":         timeframe,
         "scan_mode":         scan_mode,
+        "cancelled":         cancelled,
     }
