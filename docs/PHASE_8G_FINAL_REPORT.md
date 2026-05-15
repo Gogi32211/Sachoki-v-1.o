@@ -4,6 +4,21 @@
 **Span:** commits `92ed312` (commit 1) → `03d8df0` (commit 10), plus this report
 **Goal:** make the new scanner architecture the single source of truth, restore old Ultra signal families/scoring/split/filters/Super Chart parity.
 
+> **Status (post-verification gate):**
+> ```
+> ARCHITECTURE_SYNC_DONE
+> OLD_ULTRA_PARITY_PARTIAL
+> REAL_DATA_VERIFICATION_REQUIRED
+> ```
+> See `docs/PHASE_8G_VERIFICATION_GATE.md` for the formal in-process old-vs-new
+> engine parity proof (678/678 columns match on 6 synthetic scenarios) and the
+> list of items requiring staging access (real ticker fetch + reference old-Ultra
+> output) before this branch may merge to `main`.
+>
+> Title of this document says "Final Report" only in the sense of "final report
+> for the Phase 8G migration commits"; it does **not** mean old-Ultra parity
+> has been declared final.
+
 ---
 
 ## 1. Old files inspected
