@@ -3,136 +3,58 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sachoki Dashboard</title>
+  <title>Sachoki</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
 
   <!-- ── Command bar ── -->
   <header class="cmdbar">
-    <span class="cmdbar-brand">Sachoki Dashboard</span>
-    <span class="cmdbar-phase">Preview v2 · Phase 8A-P1</span>
-    <div class="cmdbar-meta">
+    <span class="cmdbar-brand">Sachoki</span>
+    <span class="cmdbar-phase">Preview v3 · Phase 9A</span>
+    <div class="cmdbar-meta" id="cmdMeta">
       <span id="cmScanner">Scanner: —</span>
-      <span class="sep">|</span>
-      <span>Run <strong id="cmRunId">—</strong></span>
-      <span class="sep">|</span>
-      <span id="cmUniverse">—</span>
-      <span class="sep">|</span>
-      <span id="cmTf">—</span>
-      <span class="sep">|</span>
-      <span id="cmFinished">—</span>
     </div>
     <span class="spacer"></span>
     <button id="refreshBtn" class="btn-refresh">⟳ Refresh</button>
   </header>
 
-  <!-- ── Error banner (hidden by default) ── -->
+  <!-- ── Error banner ── -->
   <div id="errorBanner" class="error-banner" style="display:none"></div>
 
-  <!-- ── Loading ── -->
-  <div id="loadingMsg">Loading dashboard…</div>
+  <!-- ── App shell ── -->
+  <div class="app-shell">
 
-  <!-- ── Main content ── -->
-  <div id="mainContent" class="container" style="display:none">
+    <!-- Sidebar nav -->
+    <nav class="sidebar">
+      <ul class="nav-list">
+        <li><a class="nav-item" href="#home"     data-page="home">
+          <span class="nav-icon">⌂</span><span class="nav-label">Home</span>
+        </a></li>
+        <li><a class="nav-item" href="#dashboard" data-page="dashboard">
+          <span class="nav-icon">▦</span><span class="nav-label">Dashboard</span>
+        </a></li>
+        <li><a class="nav-item" href="#ultra"    data-page="ultra">
+          <span class="nav-icon">⚡</span><span class="nav-label">Ultra Scanner</span>
+        </a></li>
+        <li><a class="nav-item" href="#chart"    data-page="chart">
+          <span class="nav-icon">◈</span><span class="nav-label">Superchart</span>
+        </a></li>
+        <li><a class="nav-item" href="#research" data-page="research">
+          <span class="nav-icon">◎</span><span class="nav-label">Research</span>
+        </a></li>
+        <li><a class="nav-item" href="#system"   data-page="system">
+          <span class="nav-icon">⚙</span><span class="nav-label">System</span>
+        </a></li>
+      </ul>
+    </nav>
 
-    <!-- State banner -->
-    <div id="stateBanner" class="state-banner ready"></div>
+    <!-- Page content area -->
+    <main class="page-root" id="pageRoot">
+      <div class="page-loading">Loading…</div>
+    </main>
 
-    <!-- Summary cards -->
-    <div class="section-label">Scan Summary</div>
-    <div class="cards-row">
-      <div class="card"><div class="c-label">Candidates</div><div class="c-value" id="sumTotal">—</div><div class="c-sub">total returned</div></div>
-      <div class="card"><div class="c-label">Top Score</div><div class="c-value" id="sumScore" style="color:var(--green)">—</div><div class="c-sub">ultra score</div></div>
-      <div class="card"><div class="c-label">Run ID</div><div class="c-value" id="sumRunId" style="font-size:1.1rem">—</div><div class="c-sub" id="sumSource">—</div></div>
-      <div class="card"><div class="c-label">Bands</div><div class="c-value" id="sumBandCount">—</div><div class="c-sub">active bands</div></div>
-      <div class="card"><div class="c-label">Sectors</div><div class="c-value" id="sumSectorCount">—</div><div class="c-sub">covered</div></div>
-      <div class="card"><div class="c-label">Universe</div><div class="c-value" id="sumUniverse" style="font-size:.9rem;padding-top:4px">—</div><div class="c-sub" id="sumTf">—</div></div>
-    </div>
-
-    <!-- Top Movers -->
-    <div class="section-label">Top Movers</div>
-    <div class="movers-row">
-      <div class="movers-box">
-        <div class="m-title gain-title">Top Gainers</div>
-        <div id="gainersTable"></div>
-      </div>
-      <div class="movers-box">
-        <div class="m-title loss-title">Top Losers</div>
-        <div id="losersTable"></div>
-      </div>
-    </div>
-
-    <!-- Best setups -->
-    <div class="section-label">Best Setups</div>
-    <div id="setupsRow" class="setups-row"></div>
-
-    <!-- Band + Sector distribution -->
-    <div class="section-label">Distribution</div>
-    <div class="dist-row">
-      <div class="dist-box">
-        <div class="d-title">Bands</div>
-        <div id="bandBars"></div>
-      </div>
-      <div class="dist-box">
-        <div class="d-title">Top Sectors</div>
-        <div id="sectorBars"></div>
-      </div>
-    </div>
-
-    <!-- Candidates table with filters -->
-    <div class="section-label">Top Candidates</div>
-    <div class="filters-bar">
-      <label>Symbol
-        <input id="fSearch" type="text" placeholder="AAPL, MSFT…" autocomplete="off" />
-      </label>
-      <label>Band
-        <select id="fBand">
-          <option value="">All</option>
-          <option>A+</option><option>A</option><option>B</option><option>C</option><option>D</option>
-        </select>
-      </label>
-      <label>Sector
-        <select id="fSector"><option value="">All Sectors</option></select>
-      </label>
-      <label>Min Score
-        <input id="fMinScore" type="number" min="0" max="100" placeholder="0" style="width:70px" />
-      </label>
-      <button class="btn-clear" id="clearFilters">Clear</button>
-      <span class="filter-count" id="filterCount"></span>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th class="td-rank">#</th>
-            <th>Symbol</th>
-            <th>Sector</th>
-            <th>Price</th>
-            <th>Chg%</th>
-            <th>Score</th>
-            <th>Band</th>
-            <th>Signal</th>
-            <th>Why Selected</th>
-            <th>Risk Flags</th>
-          </tr>
-        </thead>
-        <tbody id="candidatesBody"></tbody>
-      </table>
-    </div>
-
-    <!-- Data health -->
-    <div class="section-label">Data Health</div>
-    <div class="health-grid">
-      <div class="health-card"><div class="h-label">Dashboard State</div><div class="h-val" id="hState">—</div></div>
-      <div class="health-card"><div class="h-label">Scanner API</div><div class="h-val" id="hScanner">—</div></div>
-      <div class="health-card"><div class="h-label">Ultra Source</div><div class="h-val" id="hUltraSrc">—</div></div>
-      <div class="health-card"><div class="h-label">Ultra Status</div><div class="h-val" id="hUltraSt">—</div></div>
-      <div class="health-card"><div class="h-label">Candidate Count</div><div class="h-val" id="hCandCount">—</div></div>
-      <div class="health-card"><div class="h-label">Last Refreshed</div><div class="h-val" id="hRefresh">—</div></div>
-    </div>
-
-  </div><!-- /mainContent -->
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

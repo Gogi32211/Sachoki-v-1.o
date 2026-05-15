@@ -16,9 +16,12 @@
   --purple:   #bc8cff;
   --radius:   8px;
   --gap:      12px;
+  --sidebar-w: 180px;
 }
+html, body { height: 100%; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
-       background: var(--bg); color: var(--text); min-height: 100vh; }
+       background: var(--bg); color: var(--text); min-height: 100vh;
+       display: flex; flex-direction: column; }
 a { color: var(--blue); text-decoration: none; }
 
 /* ── Command bar ──────────────────────────────────────────────────────────── */
@@ -28,6 +31,7 @@ a { color: var(--blue); text-decoration: none; }
   border-bottom: 1px solid var(--border);
   padding: 10px 20px;
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  flex-shrink: 0;
 }
 .cmdbar-brand { font-size: .95rem; font-weight: 700; color: var(--text-hi); letter-spacing: .02em; }
 .cmdbar-phase { font-size: .68rem; color: var(--text-dim); background: #1c2128;
@@ -47,27 +51,91 @@ a { color: var(--blue); text-decoration: none; }
   border-radius: 6px; padding: 5px 14px; cursor: pointer; font-size: .8rem;
   transition: background .15s, border-color .15s; white-space: nowrap;
 }
-.btn-refresh:hover   { background: var(--border2); }
-.btn-refresh:disabled{ opacity: .5; cursor: not-allowed; }
+.btn-refresh:hover    { background: var(--border2); }
+.btn-refresh:disabled { opacity: .5; cursor: not-allowed; }
 .btn-refresh.spinning::after { content: " ↻"; }
 
 /* ── Error banner ─────────────────────────────────────────────────────────── */
 .error-banner {
   background: #1c0a0a; border-bottom: 1px solid #6e1a1a;
-  color: var(--red); padding: 8px 20px; font-size: .8rem;
+  color: var(--red); padding: 8px 20px; font-size: .8rem; flex-shrink: 0;
+}
+
+/* ── App shell (sidebar + main) ───────────────────────────────────────────── */
+.app-shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── Sidebar ──────────────────────────────────────────────────────────────── */
+.sidebar {
+  width: var(--sidebar-w);
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+}
+.nav-list { list-style: none; }
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 18px;
+  font-size: .8rem;
+  color: var(--text-dim);
+  border-left: 2px solid transparent;
+  transition: background .12s, color .12s, border-color .12s;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.nav-item:hover {
+  background: #1c2128;
+  color: var(--text);
+}
+.nav-item.active {
+  color: var(--blue);
+  border-left-color: var(--blue);
+  background: #0d1c2e;
+  font-weight: 600;
+}
+.nav-icon  { font-size: .9rem; width: 18px; text-align: center; flex-shrink: 0; }
+.nav-label { flex: 1; }
+
+/* ── Page root (right of sidebar) ────────────────────────────────────────── */
+.page-root {
+  flex: 1;
+  overflow-y: auto;
+  min-width: 0;
+}
+.page-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px 20px 48px;
+}
+.page-loading {
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: .9rem;
+}
+.page-error {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--red);
+  font-size: .85rem;
 }
 
 /* ── State banner ─────────────────────────────────────────────────────────── */
 .state-banner {
-  margin: 16px 20px 0; padding: 10px 16px; border-radius: var(--radius);
+  margin: 0 0 16px; padding: 10px 16px; border-radius: var(--radius);
   font-size: .85rem; border: 1px solid;
 }
 .state-banner.ready { background:#0d1f1a; border-color:#238636; color:var(--green); }
 .state-banner.warn  { background:#1c1407; border-color:#9e6a03; color:var(--yellow); }
 .state-banner.error { background:#1c0a0a; border-color:#6e1a1a; color:var(--red); }
-
-/* ── Main container ───────────────────────────────────────────────────────── */
-.container { max-width: 1400px; margin: 0 auto; padding: 16px 20px 48px; }
 
 /* ── Section label ────────────────────────────────────────────────────────── */
 .section-label {
@@ -75,6 +143,7 @@ a { color: var(--blue); text-decoration: none; }
   color: var(--text-dim); border-bottom: 1px solid var(--border);
   padding-bottom: 6px; margin: 20px 0 10px;
 }
+.section-label:first-child { margin-top: 0; }
 
 /* ── Summary cards ────────────────────────────────────────────────────────── */
 .cards-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--gap); }
@@ -85,6 +154,25 @@ a { color: var(--blue); text-decoration: none; }
 .card .c-label { font-size: .63rem; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); margin-bottom: 4px; }
 .card .c-value { font-size: 1.5rem; font-weight: 700; color: var(--text-hi); line-height: 1.1; }
 .card .c-sub   { font-size: .68rem; color: var(--text-dim); margin-top: 3px; }
+
+/* ── Quick-access grid ────────────────────────────────────────────────────── */
+.quick-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--gap);
+  margin-bottom: 4px;
+}
+.quick-card {
+  background: var(--surface); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 16px 14px;
+  display: flex; flex-direction: column; gap: 4px;
+  text-decoration: none;
+  transition: border-color .15s, background .15s;
+}
+.quick-card:hover { border-color: var(--blue); background: #0d1c2e; }
+.quick-icon  { font-size: 1.3rem; }
+.quick-label { font-size: .85rem; font-weight: 600; color: var(--text-hi); }
+.quick-sub   { font-size: .68rem; color: var(--text-dim); }
 
 /* ── Best setups ──────────────────────────────────────────────────────────── */
 .setups-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--gap); }
@@ -100,7 +188,7 @@ a { color: var(--blue); text-decoration: none; }
 .why-list li{ font-size: .65rem; color: var(--text-dim); padding: 1px 0; }
 .why-list li::before { content: "• "; color: var(--border2); }
 
-/* ── Band / Sector row ────────────────────────────────────────────────────── */
+/* ── Band / Sector distribution ───────────────────────────────────────────── */
 .dist-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
 @media (max-width: 640px) { .dist-row { grid-template-columns: 1fr; } }
 .dist-box {
@@ -163,7 +251,6 @@ thead th {
   padding: 8px 12px; font-weight: 500; font-size: .63rem;
   text-transform: uppercase; letter-spacing: .06em;
   border-bottom: 1px solid var(--border); white-space: nowrap;
-  position: sticky; top: 0; z-index: 1;
 }
 tbody tr { border-bottom: 1px solid var(--border); transition: background .1s; }
 tbody tr:hover { background: #1c2128; }
@@ -178,19 +265,6 @@ tbody tr:last-child { border-bottom: none; }
 .td-why    { max-width: 200px; }
 .td-risk   { max-width: 150px; }
 .empty-row td { text-align: center; color: var(--text-dim); padding: 32px; }
-
-/* ── Data health panel ────────────────────────────────────────────────────── */
-.health-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--gap); }
-.health-card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 12px 14px;
-}
-.health-card .h-label { font-size: .63rem; text-transform: uppercase; color: var(--text-dim);
-                         letter-spacing: .06em; margin-bottom: 4px; }
-.health-card .h-val   { font-size: .82rem; }
-.ok-text  { color: var(--green); }
-.err-text { color: var(--red); }
-.dim-text { color: var(--text-dim); }
 
 /* ── Top Movers ───────────────────────────────────────────────────────────── */
 .movers-row  { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
@@ -221,5 +295,60 @@ tbody tr:last-child { border-bottom: none; }
 .mover-score  { color: var(--text-dim); font-size: .72rem; text-align: right; }
 .mover-empty  { color: var(--text-dim); font-size: .8rem; padding: 16px 0; }
 
-/* ── Loading skeleton ─────────────────────────────────────────────────────── */
-#loadingMsg { padding: 60px 20px; text-align: center; color: var(--text-dim); font-size: .9rem; }
+/* ── Chart page ───────────────────────────────────────────────────────────── */
+.chart-controls {
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 12px 14px; margin-bottom: 4px;
+}
+.chart-label {
+  font-size: .68rem; color: var(--text-dim);
+  display: flex; flex-direction: column; gap: 3px;
+}
+.chart-input, .chart-select {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border2);
+  border-radius: 5px; padding: 5px 10px; font-size: .8rem;
+}
+.chart-input:focus, .chart-select:focus { outline: none; border-color: var(--blue); }
+.chart-result { margin-top: 4px; }
+.why-chips    { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+.missing-list { list-style: none; margin: 4px 0; }
+
+/* ── Placeholder box ──────────────────────────────────────────────────────── */
+.placeholder-box {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; padding: 40px 20px;
+  background: var(--surface); border: 1px dashed var(--border2);
+  border-radius: var(--radius); text-align: center;
+}
+.placeholder-icon { font-size: 2rem; color: var(--text-dim); }
+.placeholder-text { font-size: .85rem; color: var(--text-dim); }
+.placeholder-sub  { font-size: .72rem; color: var(--border2); max-width: 340px; }
+
+/* ── System page ──────────────────────────────────────────────────────────── */
+.status-pre {
+  background: #1c2128; border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 14px;
+  font-size: .68rem; color: var(--text-dim);
+  overflow-x: auto; white-space: pre; line-height: 1.5;
+  max-height: 400px; overflow-y: auto;
+}
+.dim-text { color: var(--text-dim); }
+
+/* ── Mobile: collapse sidebar to top strip ────────────────────────────────── */
+@media (max-width: 700px) {
+  .app-shell { flex-direction: column; }
+  .sidebar {
+    width: 100%; flex-direction: row;
+    border-right: none; border-bottom: 1px solid var(--border);
+    padding: 0; overflow-x: auto;
+  }
+  .nav-list { display: flex; flex-direction: row; }
+  .nav-item {
+    padding: 10px 12px; border-left: none; border-bottom: 2px solid transparent;
+    flex-direction: column; gap: 2px; font-size: .65rem; align-items: center;
+  }
+  .nav-item.active { border-bottom-color: var(--blue); border-left-color: transparent; }
+  .nav-icon  { font-size: 1rem; width: auto; }
+  .nav-label { font-size: .6rem; }
+}
