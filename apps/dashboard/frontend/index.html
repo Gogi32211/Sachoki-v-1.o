@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sachoki Dashboard Preview</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+  <!-- ── Header ── -->
+  <header class="header">
+    <h1>Sachoki Dashboard</h1>
+    <span class="phase-badge">Phase 4B Preview</span>
+    <span id="scannerStatus" class="scanner-status err">Scanner API: —</span>
+    <span class="spacer"></span>
+    <button id="refreshBtn">Refresh</button>
+  </header>
+
+  <!-- ── Loading / Error ── -->
+  <div id="loadingMsg" style="padding:40px;text-align:center;color:#6b7280">Loading…</div>
+  <div id="errorMsg"   style="display:none"></div>
+
+  <!-- ── Main content (hidden until data loads) ── -->
+  <div id="mainContent" class="container" style="display:none">
+
+    <!-- State banner -->
+    <div id="stateBanner" class="state-banner ready">—</div>
+
+    <!-- Scan metadata -->
+    <div class="section-title">Latest Ultra Scan</div>
+    <div class="meta-grid">
+      <div class="meta-card"><div class="label">State</div>     <div class="value" id="metaState">—</div></div>
+      <div class="meta-card"><div class="label">Run ID</div>    <div class="value" id="metaRunId">—</div></div>
+      <div class="meta-card"><div class="label">Universe</div>  <div class="value" id="metaUniverse">—</div></div>
+      <div class="meta-card"><div class="label">Timeframe</div> <div class="value" id="metaTimeframe">—</div></div>
+      <div class="meta-card"><div class="label">Candidates</div><div class="value" id="metaTotal">—</div></div>
+      <div class="meta-card"><div class="label">Finished</div>  <div class="value" id="metaFinished">—</div></div>
+      <div class="meta-card"><div class="label">Source</div>    <div class="value" id="metaSource">—</div></div>
+    </div>
+
+    <!-- Summary cards -->
+    <div class="section-title">Summary</div>
+    <div class="summary-row">
+      <div class="summary-card"><div class="num" id="sumTotal">—</div><div class="lbl">Total Candidates</div></div>
+      <div class="summary-card"><div class="num" id="sumScore">—</div><div class="lbl">Top Score</div></div>
+      <div class="summary-card"><div class="num" id="sumBands">—</div><div class="lbl">Bands</div></div>
+      <div class="summary-card"><div class="num" id="sumSectors">—</div><div class="lbl">Sectors</div></div>
+    </div>
+
+    <!-- Bands -->
+    <div class="section-title">Bands</div>
+    <div id="bandsChips" class="chips"></div>
+
+    <!-- Sectors -->
+    <div class="section-title">Sectors</div>
+    <div id="sectorsChips" class="chips" style="margin-bottom:24px"></div>
+
+    <!-- Best setups -->
+    <div class="section-title">Best Setups</div>
+    <div id="setupsGrid" class="setups-grid"></div>
+
+    <!-- Top candidates table -->
+    <div class="section-title">Top Candidates</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Symbol</th>
+            <th>Sector</th>
+            <th>Score</th>
+            <th>Band</th>
+            <th>Priority</th>
+            <th>Signal</th>
+            <th>Risk Flags</th>
+          </tr>
+        </thead>
+        <tbody id="candidatesBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Data health -->
+    <div class="section-title">Data Health</div>
+    <div class="health-grid">
+      <div class="health-card">
+        <div class="h-label">Scanner API</div>
+        <div id="healthScannerReach" class="h-val">—</div>
+      </div>
+      <div class="health-card">
+        <div class="h-label">Ultra Source</div>
+        <div class="h-val" id="healthUltraSource">—</div>
+      </div>
+      <div class="health-card">
+        <div class="h-label">Ultra Status</div>
+        <div class="h-val" id="healthUltraStatus">—</div>
+      </div>
+      <div class="health-card">
+        <div class="h-label">Candidate Count</div>
+        <div class="h-val" id="healthUltraCount">—</div>
+      </div>
+    </div>
+
+  </div><!-- /mainContent -->
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

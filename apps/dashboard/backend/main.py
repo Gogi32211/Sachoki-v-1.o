@@ -1,26 +1,35 @@
 """
-dashboard BFF — Phase 4A: scanner-api bridge.
+dashboard BFF — Phase 4B: scanner-api bridge + static frontend preview.
 
-Calls scanner-api for Ultra Scan data and exposes dashboard-friendly
-aggregated endpoints. No scans, no scoring, no DB writes, no AI/live prices.
+Serves a minimal static HTML/JS/CSS frontend at / and keeps all BFF API
+routes intact. No scans, no scoring, no DB writes, no AI/live prices.
 """
 from __future__ import annotations
 
 import logging
 import os
+import pathlib
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "info").upper())
 
-app = FastAPI(title="dashboard", version="0.3.0")
+app = FastAPI(title="dashboard", version="0.4.0")
 
-_VERSION = "0.3.0"
-_PHASE   = "4A-scanner-api-bridge"
+_VERSION = "0.4.0"
+_PHASE   = "4B-static-frontend-preview"
+
+_FRONTEND_DIR = pathlib.Path(__file__).parent.parent / "frontend"
+
+# Mount static assets (JS, CSS) — must come before catch-all route
+if _FRONTEND_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(_FRONTEND_DIR)), name="static")
+
 _TIMEOUT = 5.0  # seconds for all scanner-api calls
 
 SCANNER_API_URL  = os.getenv("SCANNER_API_URL", "").rstrip("/")
@@ -107,6 +116,14 @@ def health():
 
 @app.get("/version")
 def version():
+    return {"service": "dashboard", "version": _VERSION, "phase": _PHASE}
+
+
+@app.get("/", include_in_schema=False)
+def index():
+    index_file = _FRONTEND_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(str(index_file), media_type="text/html")
     return {"service": "dashboard", "version": _VERSION, "phase": _PHASE}
 
 
