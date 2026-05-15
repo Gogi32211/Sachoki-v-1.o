@@ -23,8 +23,18 @@ log = logging.getLogger(__name__)
 SCORE_ENGINE = "real_ultra_score"
 
 
-def _map_signals_to_row(symbol: str, signals: dict, df: pd.DataFrame | None) -> dict:
-    """Map compute_signals() output to a flat ultra_score row dict."""
+def _map_signals_to_row(
+    symbol: str,
+    signals: dict,
+    df: pd.DataFrame | None,
+    latest_bar: dict | None = None,
+) -> dict:
+    """Map compute_signals() + real engine output to a flat ultra_score row dict.
+
+    Phase 8G commit 5: when latest_bar is provided, REAL signals from the
+    engine_registry pipeline drive the boolean row. The legacy rule-of-thumb
+    proxies remain only as a fallback when latest_bar is None.
+    """
     pa20  = signals.get("price_above_ema20", False)
     pa50  = signals.get("price_above_ema50", False)
     e2050 = signals.get("ema20_above_ema50", False)
@@ -44,58 +54,103 @@ def _map_signals_to_row(symbol: str, signals: dict, df: pd.DataFrame | None) -> 
         except Exception:
             pass
 
+    # ── Real signals (preferred) ─────────────────────────────────────────────
+    real_signals = (latest_bar or {}).get("signals") or {}
+    have_real    = bool(real_signals)
+
+    if have_real:
+        t_sigs    = set(real_signals.get("t",    []))
+        l_sigs    = set(real_signals.get("l",    []))
+        f_sigs    = set(real_signals.get("f",    []))
+        i_sigs    = set(real_signals.get("i",    []))  # combo
+        vabs_sigs = set(real_signals.get("vabs", []))
+        wick_sigs = set(real_signals.get("wick", []))
+        ult_sigs  = set(real_signals.get("ult",  []))
+
+        # Combo (I row) → trigger booleans (labels match COMBO_SIG_COLS)
+        buy_2809_b = "BUY"   in i_sigs
+        rocket_b   = "ROCKET" in i_sigs
+        bb_brk_b   = "BB↑"   in i_sigs
+        svs_2809_b = "SVS"   in i_sigs
+        # L row → breakout booleans
+        bx_up_b    = "BX↑"   in l_sigs
+        bo_up_b    = "BO↑"   in l_sigs
+        be_up_b    = "BE↑"   in l_sigs
+        # VABS row
+        abs_sig_b   = "ABS"    in vabs_sigs
+        climb_sig_b = "CLB"    in vabs_sigs
+        load_sig_b  = "LD"     in vabs_sigs
+        strong_sig_b = "STRONG" in vabs_sigs
+        best_sig_b  = "BEST★"  in vabs_sigs
+        # ULT row (still empty until commit 8, but check anyway)
+        eb_bull_b = "EB↑" in ult_sigs
+        # L row → setup
+        l34_b   = "L34"   in l_sigs
+        fri34_b = "FRI34" in f_sigs
+        # T row → TZ flip
+        tz_bull_flip_b = bool(t_sigs)
+        # Combo VA badge
+        va_b = "VA" in i_sigs
+    else:
+        # Fallback: legacy inferred-proxy logic.
+        buy_2809_b   = bool(e2050 and pa20 and vr >= 1.5 and mom5 >= 3.0)
+        rocket_b     = bool(vr >= 2.5 and mom5 >= 6.0 and pa20)
+        bb_brk_b     = bb_brk
+        bx_up_b      = bool(vr >= 2.0 and mom5 >= 4.0)
+        eb_bull_b    = bool(e2050 and pa50 and rsi >= 55)
+        be_up_b      = bool(mom5 >= 3.0 and pa20 and rsi >= 50)
+        bo_up_b      = bool(vr >= 1.8 and pa50)
+        abs_sig_b    = bool(pa50 and vr >= 1.2 and 40.0 <= rsi <= 65.0 and mom5 >= 0.0)
+        va_b         = bool(pa20 and e2050 and 50.0 <= rsi <= 70.0)
+        svs_2809_b   = False
+        climb_sig_b  = bool(pa20 and mom5 >= 1.5)
+        load_sig_b   = bool(pa50 and vr >= 1.3 and rsi < 55.0)
+        strong_sig_b = bool(pa20 and rsi >= 55.0 and mom5 >= 2.0)
+        best_sig_b   = False
+        l34_b        = False
+        fri34_b      = False
+        tz_bull_flip_b = bool(cross)
+
     return {
         # Identity
         "symbol": symbol,
         "ticker": symbol,
         "price":  price,
         # ── Breakout / trigger signals ───────────────────────────────────────
-        # buy_2809: strong bullish setup — EMA aligned, elevated volume, momentum
-        "buy_2809":  bool(e2050 and pa20 and vr >= 1.5 and mom5 >= 3.0),
-        # rocket: explosive breakout — very high volume + strong momentum
-        "rocket":    bool(vr >= 2.5 and mom5 >= 6.0 and pa20),
-        # bb_brk: price breaks above Bollinger Band upper
-        "bb_brk":    bb_brk,
-        # bx_up: volume breakout upward
-        "bx_up":     bool(vr >= 2.0 and mom5 >= 4.0),
-        # eb_bull: EMA bull structure with RSI confirmation
-        "eb_bull":   bool(e2050 and pa50 and rsi >= 55),
-        # be_up: momentum entry with price above EMA20
-        "be_up":     bool(mom5 >= 3.0 and pa20 and rsi >= 50),
-        # bo_up: volume breakout above EMA50
-        "bo_up":     bool(vr >= 1.8 and pa50),
+        "buy_2809":   buy_2809_b,
+        "rocket":     rocket_b,
+        "bb_brk":     bb_brk_b,
+        "bx_up":      bx_up_b,
+        "eb_bull":    eb_bull_b,
+        "be_up":      be_up_b,
+        "bo_up":      bo_up_b,
         # ── Setup / accumulation signals ─────────────────────────────────────
-        # abs_sig: accumulation — above EMA50, rising volume, RSI not extended
-        "abs_sig":   bool(pa50 and vr >= 1.2 and 40.0 <= rsi <= 65.0 and mom5 >= 0.0),
-        # va: volume absorption — above EMAs, RSI in healthy zone
-        "va":        bool(pa20 and e2050 and 50.0 <= rsi <= 70.0),
-        "svs_2809":  False,
-        # climb_sig: steady climb above EMA20
-        "climb_sig": bool(pa20 and mom5 >= 1.5),
-        # load_sig: loading / accumulation below RSI 55 with elevated volume
-        "load_sig":  bool(pa50 and vr >= 1.3 and rsi < 55.0),
-        # strong_sig: strong setup — above EMA20, RSI healthy, positive momentum
-        "strong_sig": bool(pa20 and rsi >= 55.0 and mom5 >= 2.0),
-        "best_sig":  False,
-        "l34":       False,
-        "fri34":     False,
-        # tz_bull_flip: EMA20 crossed above EMA50 within last 5 bars
-        "tz_bull_flip": bool(cross),
+        "abs_sig":    abs_sig_b,
+        "va":         va_b,
+        "svs_2809":   svs_2809_b,
+        "climb_sig":  climb_sig_b,
+        "load_sig":   load_sig_b,
+        "strong_sig": strong_sig_b,
+        "best_sig":   best_sig_b,
+        "l34":        l34_b,
+        "fri34":      fri34_b,
+        "tz_bull_flip": tz_bull_flip_b,
         # ── Confirmation / quality signals ───────────────────────────────────
-        # rs_strong: relative strength — RSI ≥62 with positive momentum
         "rs_strong": bool(rsi >= 62.0 and mom5 >= 1.5),
         # ── Extension / penalty signals ──────────────────────────────────────
         "already_extended": bool(mom5 >= 25.0 or rsi >= 78.0),
         "rsi_extended":     bool(rsi >= 78.0),
         "cci_extended":     False,
         # ── Context fields (not available from OHLCV — neutral) ──────────────
-        "profile_score":    -1,   # -1 → contributes 0 to scoring
+        "profile_score":    -1,
         "profile_category": "",
         "tz_intel":         {},
         "pullback":         {},
         "rare_reversal":    {},
         "abr":              {},
         "FINAL_REGIME":     "",
+        # Debug flag — was the row built from real signals or proxies?
+        "_signal_source": "engine_registry" if have_real else "inferred_proxy",
     }
 
 
@@ -124,9 +179,31 @@ def compute_scanner_ultra_candidate(
     """
     from .ultra_score import compute_ultra_score
 
-    row    = _map_signals_to_row(symbol, signals, df)
+    row    = _map_signals_to_row(symbol, signals, df, latest_bar=latest_bar)
     scored = compute_ultra_score(row)
     base   = temp_candidate or {}
+
+    # ── Old-Ultra scoring fieldset ───────────────────────────────────────────
+    # real_ultra_score: raw pre-band float (matches old Ultra naming)
+    # signal_score: simple tally of active boolean triggers (lightweight stand-in
+    #               for old turbo's signal-points sum — keeps a numeric handle on
+    #               "how many real signals fired" until turbo_engine ports)
+    # final_bull_score / final_bear_score: bull = ultra_score; bear is a
+    #               placeholder mirror (commit 8 ports the dedicated bear path)
+    real_ultra_score = float(scored.get("ultra_score_raw_before_penalty") or
+                             scored.get("ultra_score") or 0.0)
+    active_count = sum(1 for k in (
+        "buy_2809", "rocket", "bb_brk", "bx_up", "eb_bull", "be_up", "bo_up",
+        "abs_sig", "va", "svs_2809", "climb_sig", "load_sig", "strong_sig",
+        "best_sig", "l34", "fri34", "tz_bull_flip", "rs_strong",
+    ) if row.get(k))
+    signal_score    = active_count * 5  # 5 pts per active signal (cap-aware)
+    final_bull      = float(scored.get("ultra_score") or 0)
+    # Penalize bear when bull triggers strongly; until real bear engine lands
+    final_bear      = max(0.0, 100.0 - final_bull) if active_count >= 2 else 0.0
+    sector_band     = base.get("sector_band") or ""
+    profile_cat     = ""    # filled by profile_playbook port (commit 8)
+    pf_value        = None  # filled by profile_playbook port (commit 8)
 
     return {
         # Identity (inherit from temp_candidate when available)
@@ -168,6 +245,16 @@ def compute_scanner_ultra_candidate(
         "ultra_score_regime_bonus":       scored["ultra_score_regime_bonus"],
         "ultra_score_caps_applied":       scored["ultra_score_caps_applied"],
         "ultra_score_cap_reason":         scored.get("ultra_score_cap_reason", ""),
+        # Old-Ultra scoring fields
+        "real_ultra_score":  real_ultra_score,
+        "signal_score":      signal_score,
+        "final_bull_score":  final_bull,
+        "final_bear_score":  final_bear,
+        "pf":                pf_value,
+        "cat":               profile_cat,
+        "category":          profile_cat,
+        "sector_band":       sector_band,
+        "signal_source":     row.get("_signal_source", "inferred_proxy"),
         # Signal slots (not available from OHLCV pipeline)
         "final_signal":   "",
         "action_bucket":  "",

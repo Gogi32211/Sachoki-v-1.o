@@ -198,6 +198,16 @@ def _normalize_candidate(row_json_str: str | None, db_score: float | None) -> di
         "engine_debug":         _get("engine_debug", default={}) or {},
         "bar_date":             _get("bar_date", default=None),
         "ultra_active_signals": _as_list(_get("ultra_active_signals", default=[])),
+        # Phase 8G commit 5: full old-Ultra scoring fieldset.
+        "real_ultra_score":     _get("real_ultra_score", default=None),
+        "signal_score":         _get("signal_score", default=None),
+        "final_bull_score":     _get("final_bull_score", default=None),
+        "final_bear_score":     _get("final_bear_score", default=None),
+        "pf":                   _get("pf", default=None),
+        "cat":                  _get("cat", default=""),
+        "category":             _get("category", default=""),
+        "sector_band":          _get("sector_band", default=""),
+        "signal_source":        _get("signal_source", default=""),
     }
 
 
