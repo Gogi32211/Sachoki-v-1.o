@@ -105,6 +105,7 @@ def compute_scanner_ultra_candidate(
     timeframe:      str = "1d",
     df:             pd.DataFrame | None = None,
     temp_candidate: dict | None = None,
+    latest_bar:     dict | None = None,
 ) -> dict:
     """
     Compute a candidate using the real Ultra scoring engine.
@@ -152,10 +153,13 @@ def compute_scanner_ultra_candidate(
         "rsi":       signals.get("rsi"),
         "vol_ratio": signals.get("vol_ratio"),
         "mom5d_pct": signals.get("mom5d_pct"),
-        # Reasons, signals, and flags from real scorer
+        # Reasons + flags from real scorer.
+        # NOTE: "signals" key removed here — the normalized signal payload
+        # from engine_registry is attached by scan_engine.run_controlled_scan
+        # and must not be clobbered with the reasons list.
         "ultra_score_reasons": scored["ultra_score_reasons"],
         "why_selected":        scored["ultra_score_reasons"],
-        "signals":             scored["ultra_score_reasons"],   # active Ultra signal tokens
+        "ultra_active_signals": scored["ultra_score_reasons"],  # active Ultra signal tokens (alias)
         "ultra_score_flags":   scored["ultra_score_flags"],
         "risk_flags":          scored["ultra_score_flags"],
         # Scoring diagnostics

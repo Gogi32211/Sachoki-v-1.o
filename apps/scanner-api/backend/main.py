@@ -186,6 +186,18 @@ def _normalize_candidate(row_json_str: str | None, db_score: float | None) -> di
         "risk_flags":           _as_list(_get("ultra_score_flags", default=[])),
         "events":               [],
         "why_selected":         _as_list(_get("ultra_score_reasons", default=[])),
+        # Phase 8G commit 3: normalized scanner payload from engine_registry.
+        # When absent (legacy rows), these surface as empty dicts so the UI
+        # can read them without null-guards.
+        "signals":              _get("signals", default={}) or {},
+        "indicators":           _get("indicators", default={}) or {},
+        "ohlcv":                _get("ohlcv", default={}) or {},
+        "scores":               _get("scores_obj", "scores", default={}) or {},
+        "roles":                _get("roles", default={}) or {},
+        "split":                _get("split", default={}) or {},
+        "engine_debug":         _get("engine_debug", default={}) or {},
+        "bar_date":             _get("bar_date", default=None),
+        "ultra_active_signals": _as_list(_get("ultra_active_signals", default=[])),
     }
 
 

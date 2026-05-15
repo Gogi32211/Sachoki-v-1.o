@@ -349,14 +349,30 @@ def run_controlled_scan(
                 errors.append({"symbol": sym, "stage": "compute_signals", "error": "Signal computation failed"})
                 continue
 
+            # Phase 8G commit 3: run the unified engine registry so we have a
+            # real per-bar signal payload to persist alongside the score.
+            # Failures are non-fatal; we still produce a scored candidate.
+            normalized_bars: list[dict] = []
+            try:
+                from .engine_registry import run_engines as _run_engines
+                normalized_bars = _run_engines(ticker=sym, timeframe=timeframe, df=df)
+            except Exception as exc:
+                log.warning("engine_registry failed for %s: %s", sym, exc)
+
+            latest_bar = normalized_bars[-1] if normalized_bars else None
+
             if scoring_mode == "real":
                 from .scoring_adapter import compute_scanner_ultra_candidate
-                candidate = compute_scanner_ultra_candidate(sym, signals, timeframe=timeframe, df=df)
+                candidate = compute_scanner_ultra_candidate(
+                    sym, signals, timeframe=timeframe, df=df, latest_bar=latest_bar,
+                )
             elif scoring_mode == "compare":
                 from .scoring_adapter import compute_scanner_ultra_candidate
                 temp = score_candidate(sym, signals)
-                real = compute_scanner_ultra_candidate(sym, signals, timeframe=timeframe, df=df,
-                                                       temp_candidate=temp)
+                real = compute_scanner_ultra_candidate(
+                    sym, signals, timeframe=timeframe, df=df,
+                    temp_candidate=temp, latest_bar=latest_bar,
+                )
                 candidate = real.copy()
                 candidate["compare"] = {
                     "temp_score":  temp["ultra_score"],
@@ -369,6 +385,32 @@ def run_controlled_scan(
                 }
             else:  # temporary (default)
                 candidate = score_candidate(sym, signals)
+
+            # Always attach the normalized scanner payload so Ultra latest,
+            # filters, and exports read the same shape Super Chart reads.
+            if latest_bar is not None:
+                candidate["signals"]    = latest_bar.get("signals")    or {}
+                candidate["indicators"] = latest_bar.get("indicators") or {}
+                candidate["ohlcv"]      = latest_bar.get("ohlcv")      or {}
+                candidate["scores_obj"] = latest_bar.get("scores")     or {}
+                candidate["roles"]      = latest_bar.get("roles")      or {}
+                candidate["split"]      = latest_bar.get("split")      or {}
+                candidate["engine_debug"] = latest_bar.get("engine_debug") or {}
+                candidate["bar_date"]   = latest_bar.get("date")
+                candidate["bar_datetime"] = latest_bar.get("datetime")
+            else:
+                # Engines couldn't run — empty signal slots, not silently absent.
+                from .unified_schema import (
+                    empty_signals, empty_scores, empty_roles, empty_split,
+                )
+                candidate["signals"]    = empty_signals()
+                candidate["indicators"] = {}
+                candidate["ohlcv"]      = {}
+                candidate["scores_obj"] = empty_scores()
+                candidate["roles"]      = empty_roles()
+                candidate["split"]      = empty_split()
+                candidate["engine_debug"] = {"engines_ran": [], "engines_failed": [],
+                                             "warnings": ["registry_unavailable"]}
 
             candidate["timeframe"] = timeframe
             # Sector enrichment — static map, never raises
