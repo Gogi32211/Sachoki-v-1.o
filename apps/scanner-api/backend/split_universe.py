@@ -212,6 +212,15 @@ class SplitUniverseResult:
 class SplitUniverseService:
     CACHE_DURATION_HOURS = 6
     MIN_RATIO            = 2.0
+    # Per-request HTTP timeout when looping NASDAQ. Original code used 10s;
+    # drop to 3s so even total cold-fetch (105 dates × 3s ≈ 5min worst case)
+    # is bounded — but normally each request completes in <500ms when NASDAQ
+    # is reachable. If NASDAQ is unreachable in this environment, every
+    # request fails fast and we return 0 events.
+    HTTP_TIMEOUT_SEC = 3
+    # In-flight refresh guard. Prevents two simultaneous refreshers (e.g.
+    # frontend polling + manual refresh) from each spinning up a NASDAQ loop.
+    _refresh_in_flight: bool = False
 
     def __init__(self) -> None:
         self._cache:         Optional[List[dict]] = None
@@ -226,6 +235,25 @@ class SplitUniverseService:
         if not force_refresh and self._is_cache_valid() and self._last_result is not None:
             return self._last_result
 
+        # In-flight guard — if another caller is already refreshing, return
+        # the stale cache (or an empty result) instead of starting a parallel
+        # NASDAQ loop. Prevents thundering herd on cache miss.
+        if SplitUniverseService._refresh_in_flight:
+            if self._last_result is not None:
+                return self._last_result
+            return SplitUniverseResult(
+                tickers=[], rows=[], total_events=0,
+                generated_at=datetime.now().isoformat(timespec="seconds"),
+                cache_key=f"{SPLIT_CACHE_VERSION}|in_flight",
+            )
+
+        SplitUniverseService._refresh_in_flight = True
+        try:
+            return self._do_refresh()
+        finally:
+            SplitUniverseService._refresh_in_flight = False
+
+    def _do_refresh(self) -> SplitUniverseResult:
         today_dt = datetime.now().date()
         raw = self._fetch_nasdaq_splits()
 
@@ -288,7 +316,7 @@ class SplitUniverseService:
                     f"{url}?date={date_str}",
                     headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
                 )
-                with urllib.request.urlopen(req, timeout=10) as resp:
+                with urllib.request.urlopen(req, timeout=self.HTTP_TIMEOUT_SEC) as resp:
                     data = json.load(resp)
             except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
                 log.debug("split fetch %s skipped: %s", date_str, exc)

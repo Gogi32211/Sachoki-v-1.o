@@ -662,6 +662,18 @@ def scan_sample_lists():
     return data
 
 
+@app.get("/api/dashboard/scans/ultra/split-universe")
+def scan_split_universe():
+    """Proxy scanner-api split-universe (warms the NASDAQ splits cache).
+    Frontend calls this lazily in the background after sample-lists loads
+    if `split_cache_warm=false`; sample-lists itself never blocks on NASDAQ."""
+    data, err = _scanner_call("split_universe")
+    if err is not None:
+        return _err_response(err)
+    data["source"] = "dashboard-bff"
+    return data
+
+
 @app.post("/api/dashboard/scans/ultra/run")
 async def scan_ultra_run(request: Request):
     """

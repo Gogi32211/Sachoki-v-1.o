@@ -340,7 +340,19 @@ async function loadSampleListsAndInit() {
       univ.querySelector('option[value="nasdaq_sample"]').textContent = `NASDAQ Sample (${counts.nasdaq_sample})`;
       univ.querySelector('option[value="manual_default"]').textContent = `Manual List (${counts.manual_default})`;
     }
+    // If split-universe cache is cold, warm it in the background. The
+    // sample-lists hot-path stays fast; the split fetch happens out-of-band.
+    if (!lists.split_cache_warm) _warmSplitUniverseInBackground();
   } catch { /* leave default labels */ }
+}
+
+let _splitWarmAttempted = false;
+function _warmSplitUniverseInBackground() {
+  if (_splitWarmAttempted) return;
+  _splitWarmAttempted = true;
+  // Fire-and-forget. /split-universe has its own 15s upstream budget.
+  apiFetch("/api/dashboard/scans/ultra/split-universe")
+    .catch(() => { /* ignore — split is optional */ });
 }
 
 async function runScan() {

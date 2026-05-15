@@ -1321,16 +1321,26 @@ def debug_scan_config():
 @app.get("/api/scans/ultra/sample-lists")
 def ultra_sample_lists():
     """
-    Phase 8G commit 4: also expose `split_universe` as a selectable list so
-    Ultra can scan only reverse-split-active tickers (single source of truth
-    with the rest of the system).
+    Phase 8G commit 4 + cold-start fix: expose split_universe as a selectable
+    list IF the cache is already warm. Cold-cache path NEVER fetches
+    synchronously — the NASDAQ splits API loops ~100 dates × HTTP requests
+    and can exceed the BFF's 10s sample_lists timeout, blocking every "Run
+    Scan" click. The dedicated /api/scans/ultra/split-universe endpoint
+    handles cache warming (it has its own 15s budget, and clients poll it
+    in the background).
+
+    Behavior:
+      cache warm  → split_universe = full tickers list
+      cache cold  → split_universe = []  (frontend can fetch separately)
     """
     split_tickers: list[str] = []
     try:
         from .split_universe import split_service
-        split_tickers = split_service.get_split_tickers()
+        # Read-only: never trigger a NASDAQ fetch from this endpoint.
+        if split_service._is_cache_valid() and split_service._last_result:
+            split_tickers = split_service._last_result.tickers
     except Exception as exc:
-        log.warning("ultra_sample_lists: split fetch failed: %s", exc)
+        log.warning("ultra_sample_lists: split cache read failed: %s", exc)
 
     return {
         "manual_default":   _DEFAULT_SYMBOLS,
@@ -1339,6 +1349,7 @@ def ultra_sample_lists():
         "watchlist_sample": [],
         "custom_sample":    [],
         "split_universe":   split_tickers,
+        "split_cache_warm": bool(split_tickers),
         "max_symbols":      _MAX_SYMBOLS,
     }
 
