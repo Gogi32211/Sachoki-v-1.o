@@ -33,8 +33,15 @@ _FRONTEND_DIR = pathlib.Path(__file__).parent.parent / "frontend"
 if _FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(_FRONTEND_DIR)), name="static")
 
-_TIMEOUT       = 5.0   # seconds for scan/dashboard calls
-_CHART_TIMEOUT = 10.0  # chart calls hit Massive via scanner-api — allow more time
+_TIMEOUT       = 5.0    # seconds for read-only scan/dashboard GETs
+_CHART_TIMEOUT = 10.0   # chart calls hit Massive via scanner-api — allow more time
+_SCAN_RUN_TIMEOUT = 30.0  # POST /scans/ultra/run only acquires lock + inserts a
+                          # run row + schedules a background task before
+                          # responding, but on a cold scanner-api process
+                          # (Railway sleep) the cold psycopg2 connect + first
+                          # request can exceed 5 s. The scan itself runs in
+                          # background — this timeout governs ONLY the
+                          # acknowledgment, not the scan duration.
 
 _VALID_SYM_RE = re.compile(r"^[A-Z]{1,5}(-[A-Z]{1,2})?$")
 _CHART_ALLOWED_TF = {"1d"}   # Phase 8E-1: daily only
@@ -97,14 +104,19 @@ def _validate_chart_sym(symbol: str) -> str | None:
 
 def _scanner_post(path: str, body: dict | None = None) -> tuple[dict | None, str | None]:
     """
-    POST {SCANNER_API_URL}{path} with 5 s timeout. Returns (data, error_message).
+    POST {SCANNER_API_URL}{path}. Returns (data, error_message).
     Never raises — all failures return (None, error_str).
+
+    Timeout is endpoint-aware:
+      /api/scans/ultra/run    -> _SCAN_RUN_TIMEOUT (30 s, cold-start safe)
+      everything else         -> _TIMEOUT          (5 s)
     """
     if not SCANNER_API_URL:
         return None, "SCANNER_API_URL not configured"
+    timeout = _SCAN_RUN_TIMEOUT if path == "/api/scans/ultra/run" else _TIMEOUT
     url = f"{SCANNER_API_URL}{path}"
     try:
-        resp = httpx.post(url, json=body or {}, timeout=_TIMEOUT)
+        resp = httpx.post(url, json=body or {}, timeout=timeout)
         resp.raise_for_status()
         return resp.json(), None
     except httpx.TimeoutException:

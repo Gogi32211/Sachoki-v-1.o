@@ -364,6 +364,22 @@ async function runScan() {
     });
     const result = await resp.json();
     if (!resp.ok || result.ok === false) {
+      const err = (result.error ?? `HTTP ${resp.status}`).toLowerCase();
+      // Timeout fallback: the scan_run POST only acks; the scan runs in
+      // background on scanner-api. If we got a timeout, the scan may have
+      // started anyway — fall back to polling /status without a run_id so
+      // the user sees real progress instead of a dead-end error.
+      if (err.includes("timeout")) {
+        $("scProgress").innerHTML = _progressHtml({
+          status: "starting",
+          symbols_scanned: 0,
+          symbols_total: count,
+          note: "ack timeout — scan may have started; polling status…",
+        });
+        _scanRunId = null;
+        _startPolling(null);
+        return;
+      }
       _showScanError(result.error ?? `HTTP ${resp.status}`);
       _scanRunning = false;
       _setScanBtns(false);
