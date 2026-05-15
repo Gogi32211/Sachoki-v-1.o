@@ -1133,13 +1133,14 @@ def run_ultra_scan(req: ScanRequest, background_tasks: BackgroundTasks):
         from . import db as _db
         from . import progress as _prog
 
-        if not _db.DATABASE_URL:
+        # Centralized DB-availability guard. Releases the scan lock on failure
+        # so we don't leave the service permanently unable to accept scans.
+        try:
+            _db.require_db()
+        except HTTPException as exc:
             with _scan_lock:
                 _scan_running = False
-            return JSONResponse(
-                status_code=503,
-                content={"accepted": False, "error": "DATABASE_URL not configured"},
-            )
+            return JSONResponse(status_code=exc.status_code, content=exc.detail)
 
         started_at = datetime.now(timezone.utc)
         run_id = _create_run_record(
@@ -1388,8 +1389,7 @@ def admin_seed(x_seed_token: str = Header(default="")):
     import psycopg2
     import psycopg2.extras
 
-    if not _db.DATABASE_URL:
-        raise HTTPException(status_code=503, detail="DATABASE_URL not configured")
+    _db.require_db()
 
     results: dict = {"schema_created": False, "run_id": None, "candidates_inserted": 0,
                      "skipped": False, "error": None}

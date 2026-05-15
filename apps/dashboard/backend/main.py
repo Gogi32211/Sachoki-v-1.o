@@ -14,10 +14,15 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+from . import scanner_client as scanner
+# Re-export so any external import of `SCANNER_API_URL` from this module
+# still resolves (used by tests + ops scripts).
+SCANNER_API_URL  = scanner.SCANNER_API_URL
+RESEARCH_API_URL = scanner.RESEARCH_API_URL
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "info").upper())
@@ -33,67 +38,77 @@ _FRONTEND_DIR = pathlib.Path(__file__).parent.parent / "frontend"
 if _FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(_FRONTEND_DIR)), name="static")
 
-_TIMEOUT       = 5.0    # seconds for read-only scan/dashboard GETs
-_CHART_TIMEOUT = 10.0   # chart calls hit Massive via scanner-api — allow more time
-_SCAN_RUN_TIMEOUT = 30.0  # POST /scans/ultra/run only acquires lock + inserts a
-                          # run row + schedules a background task before
-                          # responding, but on a cold scanner-api process
-                          # (Railway sleep) the cold psycopg2 connect + first
-                          # request can exceed 5 s. The scan itself runs in
-                          # background — this timeout governs ONLY the
-                          # acknowledgment, not the scan duration.
-
 _VALID_SYM_RE = re.compile(r"^[A-Z]{1,5}(-[A-Z]{1,2})?$")
 _CHART_ALLOWED_TF = {"1d"}   # Phase 8E-1: daily only
 _CHART_MIN_BARS   = 20
 _CHART_MAX_BARS   = 250
 
-SCANNER_API_URL  = os.getenv("SCANNER_API_URL", "").rstrip("/")
-RESEARCH_API_URL = os.getenv("RESEARCH_API_URL", "").rstrip("/")
-
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HTTP client helpers
+# Upstream call wrappers — declarative.
+#
+# Single source of truth for "path → registered endpoint name" lives here.
+# All actual HTTP policy (timeout, retry, error mapping) is owned by
+# scanner_client.ENDPOINTS.
+#
+# Wrappers preserve the legacy (data, error_string) tuple shape so existing
+# call sites stay one-line refactors. New call sites should prefer
+# `_scanner_call(name, ...)` directly to receive a structured UpstreamError.
 # ─────────────────────────────────────────────────────────────────────────────
+
+_PATH_TO_ENDPOINT: dict[str, str] = {
+    "/health":                                 "scanner_health",
+    "/version":                                "scanner_version",
+    "/api/chart/signals":                      "scanner_signals",
+    "/api/chart/candles":                      "chart_candles",
+    "/api/chart/score":                        "chart_score",
+    "/api/chart/snapshot":                     "chart_snapshot",
+    "/api/chart/history":                      "chart_history",
+    "/api/scans/ultra/sample-lists":           "sample_lists",
+    "/api/scans/ultra/split-universe":         "split_universe",
+    "/api/scans/ultra/run":                    "scan_run",
+    "/api/scans/ultra/status":                 "scan_status",
+    "/api/scans/ultra/cancel":                 "scan_cancel",
+    "/api/scans/ultra/latest":                 "scan_latest",
+    "/api/scans/ultra/latest/candidates":      "scan_latest_candidates",
+}
+
+
+def _scanner_call(
+    name: str,
+    *,
+    params: dict | None = None,
+    body:   dict | None = None,
+) -> tuple[dict | None, scanner.UpstreamError | None]:
+    """Direct path: registered endpoint name → structured (data, error)."""
+    return scanner.call(name, params=params, body=body)
+
+
+def _resolve(path: str) -> str:
+    ep = _PATH_TO_ENDPOINT.get(path)
+    if not ep:
+        raise KeyError(f"upstream path {path!r} is not registered in _PATH_TO_ENDPOINT")
+    return ep
+
 
 def _scanner_get(path: str, params: dict | None = None) -> tuple[dict | None, str | None]:
-    """
-    GET {SCANNER_API_URL}{path}. Returns (data, error_message).
-    Never raises — all failures return (None, error_str).
-    """
-    if not SCANNER_API_URL:
-        return None, "SCANNER_API_URL not configured"
-    url = f"{SCANNER_API_URL}{path}"
-    try:
-        resp = httpx.get(url, params=params or {}, timeout=_TIMEOUT)
-        resp.raise_for_status()
-        return resp.json(), None
-    except httpx.TimeoutException:
-        return None, "scanner-api timeout"
-    except httpx.HTTPStatusError as exc:
-        return None, f"scanner-api HTTP {exc.response.status_code}"
-    except Exception as exc:
-        return None, type(exc).__name__
+    """Legacy wrapper — returns (data, error_string) to keep existing
+    call sites untouched. New code should use _scanner_call() for the
+    structured UpstreamError shape."""
+    data, err = scanner.call(_resolve(path), params=params)
+    return data, (err.message if err else None)
 
 
 def _chart_get(path: str, params: dict | None = None) -> tuple[dict | None, str | None]:
-    """
-    GET {SCANNER_API_URL}{path} with chart timeout. Returns (data, error_message).
-    Never raises — all failures return (None, error_str).
-    """
-    if not SCANNER_API_URL:
-        return None, "SCANNER_API_URL not configured"
-    url = f"{SCANNER_API_URL}{path}"
-    try:
-        resp = httpx.get(url, params=params or {}, timeout=_CHART_TIMEOUT)
-        resp.raise_for_status()
-        return resp.json(), None
-    except httpx.TimeoutException:
-        return None, "scanner-api chart timeout"
-    except httpx.HTTPStatusError as exc:
-        return None, f"scanner-api HTTP {exc.response.status_code}"
-    except Exception as exc:
-        return None, type(exc).__name__
+    """Legacy chart-specific wrapper. Timeout/retry policy lives in
+    scanner_client.ENDPOINTS, so this is now identical to _scanner_get."""
+    return _scanner_get(path, params=params)
+
+
+def _scanner_post(path: str, body: dict | None = None) -> tuple[dict | None, str | None]:
+    """Legacy POST wrapper — see _scanner_get."""
+    data, err = scanner.call(_resolve(path), body=body)
+    return data, (err.message if err else None)
 
 
 def _validate_chart_sym(symbol: str) -> str | None:
@@ -102,29 +117,12 @@ def _validate_chart_sym(symbol: str) -> str | None:
     return s if _VALID_SYM_RE.match(s) else None
 
 
-def _scanner_post(path: str, body: dict | None = None) -> tuple[dict | None, str | None]:
-    """
-    POST {SCANNER_API_URL}{path}. Returns (data, error_message).
-    Never raises — all failures return (None, error_str).
-
-    Timeout is endpoint-aware:
-      /api/scans/ultra/run    -> _SCAN_RUN_TIMEOUT (30 s, cold-start safe)
-      everything else         -> _TIMEOUT          (5 s)
-    """
-    if not SCANNER_API_URL:
-        return None, "SCANNER_API_URL not configured"
-    timeout = _SCAN_RUN_TIMEOUT if path == "/api/scans/ultra/run" else _TIMEOUT
-    url = f"{SCANNER_API_URL}{path}"
-    try:
-        resp = httpx.post(url, json=body or {}, timeout=timeout)
-        resp.raise_for_status()
-        return resp.json(), None
-    except httpx.TimeoutException:
-        return None, "scanner-api timeout"
-    except httpx.HTTPStatusError as exc:
-        return None, f"scanner-api HTTP {exc.response.status_code}"
-    except Exception as exc:
-        return None, type(exc).__name__
+def _err_response(err: scanner.UpstreamError) -> JSONResponse:
+    """Map a structured UpstreamError to an HTTP response with `error_code`."""
+    return JSONResponse(
+        status_code=scanner.err_to_http_status(err),
+        content=scanner.err_response_body(err),
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -717,12 +715,14 @@ async def scan_ultra_run(request: Request):
         "timeframe":      timeframe,
         "replace_latest": replace,
     }
-    data, err = _scanner_post("/api/scans/ultra/run", body=scan_body)
-    if data is None:
-        return JSONResponse(
-            status_code=503,
-            content={"ok": False, "error": err or "scanner-api unavailable", "source": "dashboard-bff"},
-        )
+    # Direct registry call returns structured UpstreamError so the frontend
+    # can match on `error_code` (UPSTREAM_TIMEOUT, …) instead of parsing the
+    # message string. This is the route where it matters most — scan_run is
+    # the only "ack" endpoint we have, and the frontend has a special
+    # fallback (poll status without run_id) for UPSTREAM_TIMEOUT.
+    data, err = _scanner_call("scan_run", body=scan_body)
+    if err is not None:
+        return _err_response(err)
 
     data["source"]    = "dashboard-bff"
     data["universe"]  = universe
@@ -737,12 +737,9 @@ def scan_ultra_status(run_id: str | None = Query(default=None)):
     params = {}
     if run_id:
         params["run_id"] = run_id
-    data, err = _scanner_get("/api/scans/ultra/status", params=params or None)
-    if data is None:
-        return JSONResponse(
-            status_code=503,
-            content={"ok": False, "error": err or "scanner-api unavailable", "source": "dashboard-bff"},
-        )
+    data, err = _scanner_call("scan_status", params=params or None)
+    if err is not None:
+        return _err_response(err)
     data["source"] = "dashboard-bff"
     return data
 

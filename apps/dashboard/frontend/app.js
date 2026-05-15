@@ -364,12 +364,16 @@ async function runScan() {
     });
     const result = await resp.json();
     if (!resp.ok || result.ok === false) {
-      const err = (result.error ?? `HTTP ${resp.status}`).toLowerCase();
-      // Timeout fallback: the scan_run POST only acks; the scan runs in
-      // background on scanner-api. If we got a timeout, the scan may have
-      // started anyway — fall back to polling /status without a run_id so
-      // the user sees real progress instead of a dead-end error.
-      if (err.includes("timeout")) {
+      // BFF now returns structured upstream errors with `error_code` —
+      // we match on the code, not the human-readable message string.
+      // Codes are defined in apps/dashboard/backend/scanner_client.py:
+      //   UPSTREAM_TIMEOUT, UPSTREAM_UNAVAILABLE, UPSTREAM_NOT_CONFIGURED,
+      //   UPSTREAM_HTTP_4XX, UPSTREAM_HTTP_5XX, UPSTREAM_UNKNOWN.
+      const code = result.error_code || "";
+      if (code === "UPSTREAM_TIMEOUT") {
+        // scan_run is an "ack" endpoint; the actual scan runs in
+        // background on scanner-api. A timeout here means we missed the
+        // ack but the scan may have started — fall back to polling.
         $("scProgress").innerHTML = _progressHtml({
           status: "starting",
           symbols_scanned: 0,

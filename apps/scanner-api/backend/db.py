@@ -3,6 +3,10 @@ db.py — Read-only PostgreSQL helper for scanner-api.
 
 Opens one connection per call. No writes. No migrations.
 Falls back cleanly if DATABASE_URL is absent or unreachable.
+
+Architecture rule: every endpoint that needs a database calls require_db()
+at its top. That's the ONE place "is the DB usable?" is decided. Do not
+sprinkle `if not _db.DATABASE_URL: return 503` across endpoints.
 """
 from __future__ import annotations
 
@@ -11,6 +15,8 @@ import os
 from contextlib import contextmanager
 from typing import Generator
 
+from fastapi import HTTPException
+
 log = logging.getLogger(__name__)
 
 DATABASE_URL: str | None = os.environ.get("DATABASE_URL")
@@ -18,6 +24,26 @@ DATABASE_URL: str | None = os.environ.get("DATABASE_URL")
 
 def _available() -> bool:
     return bool(DATABASE_URL)
+
+
+def require_db() -> None:
+    """
+    Endpoint guard. Raises 503 HTTPException if DATABASE_URL is not set.
+
+    Endpoints that need a DB write or read should call this at the top —
+    one line, no boilerplate response body. Centralized so the wording,
+    HTTP code, and behavior (e.g. logging, retry-after header) live in
+    one place forever.
+    """
+    if not DATABASE_URL:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "ok":         False,
+                "error":      "DATABASE_URL not configured",
+                "error_code": "DB_NOT_CONFIGURED",
+            },
+        )
 
 
 def ping() -> tuple[bool, str]:
