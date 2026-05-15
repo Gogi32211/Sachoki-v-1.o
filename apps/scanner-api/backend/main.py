@@ -1309,14 +1309,52 @@ def debug_scan_config():
 
 @app.get("/api/scans/ultra/sample-lists")
 def ultra_sample_lists():
+    """
+    Phase 8G commit 4: also expose `split_universe` as a selectable list so
+    Ultra can scan only reverse-split-active tickers (single source of truth
+    with the rest of the system).
+    """
+    split_tickers: list[str] = []
+    try:
+        from .split_universe import split_service
+        split_tickers = split_service.get_split_tickers()
+    except Exception as exc:
+        log.warning("ultra_sample_lists: split fetch failed: %s", exc)
+
     return {
-        "manual_default":  _DEFAULT_SYMBOLS,
-        "sp500_sample":    _SP500_SAMPLE,
-        "nasdaq_sample":   _NASDAQ_SAMPLE,
-        "watchlist_sample":[],
-        "custom_sample":   [],
-        "max_symbols":     _MAX_SYMBOLS,
+        "manual_default":   _DEFAULT_SYMBOLS,
+        "sp500_sample":     _SP500_SAMPLE,
+        "nasdaq_sample":    _NASDAQ_SAMPLE,
+        "watchlist_sample": [],
+        "custom_sample":    [],
+        "split_universe":   split_tickers,
+        "max_symbols":      _MAX_SYMBOLS,
     }
+
+
+@app.get("/api/scans/ultra/split-universe")
+def ultra_split_universe():
+    """
+    Full reverse-split universe with lifecycle metadata. Powers the
+    UltraScanPanel `split` filter and the Super Chart split badges.
+    """
+    try:
+        from .split_universe import split_service
+        res = split_service.get_split_universe_result()
+        return {
+            "ok":                True,
+            "tickers":           res.tickers,
+            "rows":              res.rows,
+            "total_events":      res.total_events,
+            "reverse_split_events": res.reverse_split_events,
+            "stock_like_events": res.stock_like_events,
+            "filtered_non_stock": res.filtered_non_stock,
+            "generated_at":      res.generated_at,
+            "cache_key":         res.cache_key,
+        }
+    except Exception as exc:
+        log.warning("split-universe endpoint failed: %s", exc)
+        return {"ok": False, "tickers": [], "rows": [], "error": type(exc).__name__}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

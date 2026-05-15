@@ -128,6 +128,9 @@ def run_engines(
     wick_df  = _run_wick(idf, engines_ran, engines_failed)
     combo_df = _run_combo(idf, engines_ran, engines_failed)
 
+    # 2b. Split / reverse-split flags (per-ticker, same on every bar).
+    split_flags = _resolve_split_flags(ticker, engines_ran, engines_failed)
+
     routing = _build_routing()
 
     # 3. Build per-bar normalized objects.
@@ -147,6 +150,10 @@ def run_engines(
         bar["engine_debug"]["engines_ran"]    = list(engines_ran)
         bar["engine_debug"]["engines_failed"] = list(engines_failed)
         bar["engine_debug"]["warnings"]       = list(warnings)
+
+        # Split flags (constant per ticker for this scan)
+        if split_flags is not None:
+            bar["split"] = dict(split_flags)
 
         # OHLCV + indicators
         ohlcv = bar["ohlcv"]
@@ -253,6 +260,22 @@ def _run_wick(idf, ran, failed):
     except Exception as exc:
         log.warning("wick engine failed: %s", exc)
         failed.append("wick")
+        return None
+
+
+def _resolve_split_flags(ticker, ran, failed):
+    """
+    Look up reverse-split lifecycle flags for the ticker. Network failure
+    inside split_service returns a clean empty-split dict — never raises.
+    """
+    try:
+        from .split_universe import get_split_flags_for_ticker
+        out = get_split_flags_for_ticker(ticker)
+        ran.append("split")
+        return out
+    except Exception as exc:
+        log.warning("split lookup failed for %s: %s", ticker, exc)
+        failed.append("split")
         return None
 
 
