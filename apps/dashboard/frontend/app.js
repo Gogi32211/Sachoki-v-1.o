@@ -480,8 +480,8 @@ function _setScanBtns(running) {
   if (cancelBtn) { cancelBtn.disabled = !running; }
 }
 
-// Phase 8G commit 9: signal-family filter chips for Ultra latest table.
-// Reads bar.signals.{family} from the normalized scanner output.
+// Phase 8G commit 9 + Phase 8H UI parity: filter widgets for Ultra latest table.
+// Reads bar.signals.{family} and bar.scores/ohlcv from the normalized scanner output.
 const _FILTER_FAMILIES = [
   { key: "t",     label: "T"     }, { key: "z",     label: "Z"     },
   { key: "l",     label: "L"     }, { key: "f",     label: "F"     },
@@ -492,6 +492,44 @@ const _FILTER_FAMILIES = [
   { key: "gog",   label: "GOG"   }, { key: "ctx",   label: "CTX"   },
 ];
 const _ultraSelectedFamilies = new Set();
+
+// Score bands matching old Ultra: all / 0-20 / 21-40 / 41-60 / 61-80 / 81-100
+const _SCORE_BANDS = [
+  { key: "all", label: "ALL",    min: null, max: null },
+  { key: "b1",  label: "0–20",   min: 0,    max: 20 },
+  { key: "b2",  label: "21–40",  min: 21,   max: 40 },
+  { key: "b3",  label: "41–60",  min: 41,   max: 60 },
+  { key: "b4",  label: "61–80",  min: 61,   max: 80 },
+  { key: "b5",  label: "81–100", min: 81,   max: 100 },
+];
+let _selectedScoreBand = "all";
+
+// Volume bands matching old Ultra: All / <100K / 100K+ / 500K+ / 1M+ / 5M+
+const _VOL_BANDS = [
+  { key: "all",    label: "All",    min: null,    max: null },
+  { key: "lt100k", label: "<100K",  min: 0,       max: 100_000 },
+  { key: "100k",   label: "100K+",  min: 100_000, max: null },
+  { key: "500k",   label: "500K+",  min: 500_000, max: null },
+  { key: "1m",     label: "1M+",    min: 1_000_000, max: null },
+  { key: "5m",     label: "5M+",    min: 5_000_000, max: null },
+];
+let _selectedVolBand = "all";
+
+// Direction toggle: ALL / BULL / BEAR
+const _DIR_OPTS = [
+  { key: "all",  label: "ALL"  },
+  { key: "bull", label: "BULL" },
+  { key: "bear", label: "BEAR" },
+];
+let _selectedDir = "all";
+
+function _refreshSegRow(rowId, dataAttr, selectedKey) {
+  const row = $(rowId);
+  if (!row) return;
+  row.querySelectorAll(`[data-${dataAttr}]`).forEach(btn => {
+    btn.classList.toggle("seg-btn-active", btn.dataset[dataAttr] === selectedKey);
+  });
+}
 
 // CSV export of currently-filtered Ultra candidates with normalized payload.
 let _lastFilteredCandidates = [];
@@ -691,19 +729,48 @@ async function renderUltra() {
         <span class="filter-count" id="filterCount"></span>
       </div>
       <div id="ultraDebugPanel" class="ultra-debug-panel" style="display:none"></div>
+      <div class="filter-row" id="filterScoreBands">
+        <span class="filter-row-label">Score band</span>
+        ${_SCORE_BANDS.map(b =>
+          `<button type="button" class="seg-btn" data-band="${b.key}">${esc(b.label)}</button>`
+        ).join("")}
+      </div>
+      <div class="filter-row" id="filterVolBands">
+        <span class="filter-row-label">Volume</span>
+        ${_VOL_BANDS.map(v =>
+          `<button type="button" class="seg-btn" data-vol="${v.key}">${esc(v.label)}</button>`
+        ).join("")}
+      </div>
+      <div class="filter-row" id="filterDirection">
+        <span class="filter-row-label">Direction</span>
+        ${_DIR_OPTS.map(d =>
+          `<button type="button" class="seg-btn" data-dir="${d.key}">${esc(d.label)}</button>`
+        ).join("")}
+      </div>
       <div class="filter-families" id="filterFamilies">
-        <span class="filter-families-label">Signal family:</span>
+        <span class="filter-families-label">Signal family</span>
         ${_FILTER_FAMILIES.map(f =>
           `<button type="button" class="chip family-chip" data-family="${f.key}">${esc(f.label)}</button>`
         ).join("")}
         <button type="button" class="chip family-chip family-clear" id="famClearBtn">clear</button>
       </div>
       <div class="table-wrap">
-        <table>
+        <table class="ultra-table">
           <thead><tr>
-            <th class="td-rank">#</th><th>Symbol</th><th>Sector</th>
-            <th>Price</th><th>Chg%</th><th>Score</th><th>Band</th>
-            <th>Signal</th><th>Why Selected</th><th>Risk Flags</th><th></th>
+            <th class="td-rank">#</th>
+            <th>Symbol</th>
+            <th>Score</th>
+            <th>RTB</th>
+            <th>T/Z</th>
+            <th>Cat</th>
+            <th class="td-signals">Signals</th>
+            <th>RSI</th>
+            <th>CCI</th>
+            <th>Price</th>
+            <th>%</th>
+            <th>Split</th>
+            <th>Sector</th>
+            <th></th>
           </tr></thead>
           <tbody id="candidatesBody"></tbody>
         </table>
@@ -743,6 +810,32 @@ async function renderUltra() {
   });
   _refreshFamilyChips();
 
+  // Segmented controls (score bands, volume, direction)
+  document.querySelectorAll("#filterScoreBands [data-band]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      _selectedScoreBand = btn.dataset.band;
+      _refreshSegRow("filterScoreBands", "band", _selectedScoreBand);
+      applyUltraFilters();
+    });
+  });
+  document.querySelectorAll("#filterVolBands [data-vol]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      _selectedVolBand = btn.dataset.vol;
+      _refreshSegRow("filterVolBands", "vol", _selectedVolBand);
+      applyUltraFilters();
+    });
+  });
+  document.querySelectorAll("#filterDirection [data-dir]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      _selectedDir = btn.dataset.dir;
+      _refreshSegRow("filterDirection", "dir", _selectedDir);
+      applyUltraFilters();
+    });
+  });
+  _refreshSegRow("filterScoreBands", "band", _selectedScoreBand);
+  _refreshSegRow("filterVolBands",   "vol",  _selectedVolBand);
+  _refreshSegRow("filterDirection",  "dir",  _selectedDir);
+
   const expBtn = $("exportCsvBtn");
   if (expBtn) expBtn.addEventListener("click", _exportUltraCSV);
   const dbgBtn = $("debugPanelBtn");
@@ -773,6 +866,29 @@ function applyUltraFilters() {
     if (sector && c.sector !== sector) return false;
     if ((c.ultra_score ?? 0) < minScore) return false;
 
+    // Score band segmented filter
+    const sb = _SCORE_BANDS.find(b => b.key === _selectedScoreBand);
+    if (sb && sb.min != null) {
+      const s = c.ultra_score ?? 0;
+      if (s < sb.min || (sb.max != null && s > sb.max)) return false;
+    }
+
+    // Volume segmented filter
+    const vb = _VOL_BANDS.find(v => v.key === _selectedVolBand);
+    if (vb && vb.min != null) {
+      const v = (c.ohlcv && c.ohlcv.volume) || c.volume || 0;
+      if (v < vb.min || (vb.max != null && v > vb.max)) return false;
+    }
+
+    // Direction filter (derived from signals.t / signals.z presence)
+    if (_selectedDir === "bull") {
+      const t = (c.signals && c.signals.t) || [];
+      if (!t.length) return false;
+    } else if (_selectedDir === "bear") {
+      const z = (c.signals && c.signals.z) || [];
+      if (!z.length) return false;
+    }
+
     // Split filter
     const split = c.split || {};
     if (splitOpt === "exclude" && split.split_contaminated) return false;
@@ -801,30 +917,94 @@ function applyUltraFilters() {
   renderCandidateTable(filtered);
 }
 
+// Row order in which we flatten candidate.signals.* into the Signals badge string.
+// Matches old Ultra column order: ABCD/SETUP first, then VABS, COMBO, ULT, L, GOG, CTX, B/F/FLY/G.
+const _SIG_RENDER_ORDER = ["setup", "vabs", "i", "ult", "l", "gog", "ctx", "f", "fly", "g", "b", "wick"];
+
+function _renderSignalString(signals) {
+  if (!signals) return "";
+  const out = [];
+  for (const row of _SIG_RENDER_ORDER) {
+    const arr = signals[row] || [];
+    for (const lbl of arr) out.push(SignalBadges.renderSignalBadge(lbl));
+  }
+  return out.join("");
+}
+
+function _formatSplitLifecycle(split) {
+  if (!split || !split.has_split) return "—";
+  const ratio = split.split_ratio
+    ? `1:${Math.round(split.split_ratio)}`
+    : "";
+  const wave = split.wave || "";
+  const doff = split.days_offset;
+  const dstr = (doff != null && doff !== "")
+    ? (doff >= 0 ? `D+${doff}` : `D${doff}`)
+    : "";
+  return [ratio, wave, dstr].filter(Boolean).join(" ");
+}
+
+function _firstSignal(signals, row) {
+  const arr = signals && signals[row];
+  return Array.isArray(arr) && arr.length ? arr[0] : "";
+}
+
+function _rtbCellClass(phase) {
+  if (phase === "A") return "rtb-a";
+  if (phase === "B") return "rtb-b";
+  if (phase === "C") return "rtb-c";
+  if (phase === "D") return "rtb-d";
+  return "rtb-none";
+}
+
 function renderCandidateTable(candidates) {
   const body = $("candidatesBody");
   if (!body) return;
   if (!candidates.length) {
-    body.innerHTML = `<tr class="empty-row"><td colspan="11">No candidates match the current filters.</td></tr>`;
+    body.innerHTML = `<tr class="empty-row"><td colspan="14">No candidates match the current filters.</td></tr>`;
     return;
   }
   body.innerHTML = candidates.map((c, i) => {
     const chgVal = c.change_pct;
     const chgTxt = chgVal != null ? (chgVal >= 0 ? "+" : "") + fmt(chgVal, 2) + "%" : "—";
     const chgCls = chgVal == null ? "" : chgVal >= 0 ? "pos" : "neg";
-    const why    = (c.why_selected ?? []).slice(0, 3).map(w => `<span class="chip" style="font-size:.6rem">${esc(w)}</span>`).join(" ");
-    const risk   = (c.risk_flags  ?? []).map(r => `<span class="chip risk" style="font-size:.6rem">${esc(r)}</span>`).join(" ");
+
+    // All visual fields come from the normalized scanner payload — no fallbacks
+    // to inferred values. If a field is null, render "—".
+    const scores = c.scores || {};
+    const ind    = c.indicators || {};
+    const signals = c.signals || {};
+
+    const score = c.ultra_score ?? scores.ultra_score;
+    const band  = c.band || scores.band || "";
+    const rtb   = scores.rtb_phase || "";
+    const tz    = _firstSignal(signals, "t") || _firstSignal(signals, "z");
+    const cat   = scores.category || c.category || "";   // SWEET / WATCH / BUILDING when profile_playbook lands
+    const sigs  = _renderSignalString(signals);
+    const rsi   = ind.rsi != null ? fmt(ind.rsi, 0) : "—";
+    const cci   = ind.cci != null ? fmt(ind.cci, 0) : "—";
+    const rsiCls = ind.rsi == null ? "" : (ind.rsi >= 70 ? "rsi-hi" : ind.rsi <= 35 ? "rsi-lo" : "");
+    const cciCls = ind.cci == null ? "" : (ind.cci >= 100 ? "cci-hi" : ind.cci <= -100 ? "cci-lo" : "");
+    const splitTxt = _formatSplitLifecycle(c.split || {});
+
+    const tzBadge  = tz  ? SignalBadges.renderSignalBadge(tz)  : "—";
+    const catBadge = cat ? `<span class="chip cat-${esc(cat.toLowerCase())}">${esc(cat)}</span>` : "—";
+    const rtbBadge = rtb ? `<span class="rtb-pill ${_rtbCellClass(rtb)}">${esc(rtb)}</span>` : "—";
+
     return `<tr>
       <td class="td-rank">${i + 1}</td>
-      <td class="td-sym">${esc(c.symbol)}</td>
-      <td>${esc(c.sector || "—")}</td>
+      <td class="td-sym">★ ${esc(c.symbol)}</td>
+      <td class="td-score">${score ?? "—"}</td>
+      <td class="td-rtb">${rtbBadge}</td>
+      <td class="td-tz">${tzBadge}</td>
+      <td class="td-cat">${catBadge}</td>
+      <td class="td-signals">${sigs || `<span class="sig sig-neutral">${esc(c.final_signal || "")}</span>`}</td>
+      <td class="td-rsi ${rsiCls}">${rsi}</td>
+      <td class="td-cci ${cciCls}">${cci}</td>
       <td class="td-price">${c.price != null ? "$" + fmt(c.price, 2) : "—"}</td>
       <td class="td-chg ${chgCls}">${chgTxt}</td>
-      <td class="td-score">${c.ultra_score ?? "—"}</td>
-      <td><span class="chip ${bandClass(c.band)}">${esc(c.band || "—")}</span></td>
-      <td>${c.final_signal ? `<span class="chip signal">${esc(c.final_signal)}</span>` : "—"}</td>
-      <td class="td-why">${why || "—"}</td>
-      <td class="td-risk">${risk || "—"}</td>
+      <td class="td-split">${esc(splitTxt)}</td>
+      <td class="td-sector">${esc(c.sector || "—")}</td>
       <td><button class="btn-chart" onclick="openChart('${esc(c.symbol)}')" title="Open in Superchart">◈</button></td>
     </tr>`;
   }).join("");
@@ -1126,9 +1306,11 @@ function _buildHistoryTimeline(data) {
       const cells = bars.map(bar => {
         const sigs = bar.signals?.[row.key] ?? [];
         if (!sigs.length) return `<td class="tl-cell"></td>`;
-        const badges = sigs.map(s =>
-          `<span class="tl-badge ${row.cls}">${esc(s)}</span>`
-        ).join("");
+        // Design system: badge color is resolved by the family-aware
+        // resolver, not by row-level cls. So "ROCKET" in the i row is bold
+        // green, "BEST↑" in the ult row is bold yellow, "L88" is bold violet,
+        // "G1P" is ringed green, etc. — identical to old Ultra.
+        const badges = sigs.map(s => SignalBadges.renderSignalBadge(s)).join("");
         return `<td class="tl-cell">${badges}</td>`;
       }).join("");
       return `<tr><th class="tl-row-label">${esc(row.label)}</th>${cells}</tr>`;

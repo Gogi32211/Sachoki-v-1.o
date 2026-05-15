@@ -495,6 +495,40 @@ tbody tr:last-child { border-bottom: none; }
 .badge-gog     { background: #221234; color: #d8b4fe; border-color: #7e22ce; }
 .badge-neutral { background: #1c2128; color: var(--text-dim); border-color: var(--border2); }
 
+/* Segmented filter rows (score band / volume / direction) */
+.filter-row {
+  display: flex; flex-wrap: wrap; gap: var(--sp-2);
+  align-items: center;
+  padding: var(--sp-3) var(--sp-5);
+  border-top: 1px solid var(--border-secondary);
+}
+.filter-row-label {
+  font-size: var(--fz-xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-right: var(--sp-3);
+  min-width: 64px;
+}
+.seg-btn {
+  font-size: var(--fz-xs);
+  font-family: var(--font-mono);
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--radius);
+  background: var(--surface-elevated);
+  color: var(--text-on-surface);
+  border: 1px solid var(--border-primary);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+.seg-btn:hover { background: var(--surface-overlay); }
+.seg-btn-active {
+  background: var(--c-accent);
+  color: #ffffff;
+  border-color: var(--c-accent);
+}
+
 /* Ultra filter signal-family chips */
 .filter-families {
   display: flex; flex-wrap: wrap; gap: 4px;
@@ -516,6 +550,58 @@ tbody tr:last-child { border-bottom: none; }
 }
 .family-clear { background: transparent; color: var(--text-dim); }
 .family-clear:hover { color: var(--text); }
+
+/* Ultra table — old-Ultra parity column styling */
+.ultra-table { font-size: var(--fz-sm); }
+.ultra-table th, .ultra-table td {
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border-secondary);
+  vertical-align: middle;
+}
+.ultra-table th {
+  text-align: left;
+  font-weight: var(--fw-semibold);
+  color: var(--text-muted);
+  font-size: var(--fz-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ultra-table .td-rank    { color: var(--text-dim); width: 32px; }
+.ultra-table .td-sym     { font-weight: var(--fw-semibold); }
+.ultra-table .td-score   { font-weight: var(--fw-bold); color: var(--c-amber-300); }
+.ultra-table .td-rtb,
+.ultra-table .td-tz,
+.ultra-table .td-cat     { white-space: nowrap; }
+.ultra-table .td-signals { max-width: 520px; line-height: 1.6; }
+.ultra-table .td-rsi,
+.ultra-table .td-cci,
+.ultra-table .td-price,
+.ultra-table .td-chg     { font-family: var(--font-mono); text-align: right; }
+.ultra-table .rsi-hi, .ultra-table .cci-lo { color: var(--c-neg); }
+.ultra-table .rsi-lo, .ultra-table .cci-hi { color: var(--c-pos); }
+.ultra-table .td-chg.pos { color: var(--c-pos); }
+.ultra-table .td-chg.neg { color: var(--c-neg); }
+.ultra-table .td-split   { font-family: var(--font-mono); font-size: var(--fz-xs); color: var(--text-muted); }
+.ultra-table .td-sector  { color: var(--text-muted); }
+
+/* RTB phase pill */
+.rtb-pill {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%;
+  font-size: var(--fz-xs); font-weight: var(--fw-bold);
+  font-family: var(--font-mono);
+  box-shadow: inset 0 0 0 var(--ring-w) currentColor;
+}
+.rtb-pill.rtb-a { background: var(--c-amber-900);   color: var(--c-amber-300); }
+.rtb-pill.rtb-b { background: var(--c-sky-900);     color: var(--c-sky-300); }
+.rtb-pill.rtb-c { background: var(--c-lime-900);    color: var(--c-lime-300); }
+.rtb-pill.rtb-d { background: var(--c-rose-900);    color: var(--c-rose-300); }
+.rtb-pill.rtb-none { background: transparent; color: var(--text-dim); box-shadow: none; }
+
+/* Category chip (Pf/Cat — placeholder shapes; populate once profile_playbook lands) */
+.cat-sweet     { background: var(--c-yellow-900);  color: var(--c-yellow-200); }
+.cat-watch     { background: var(--c-amber-900);   color: var(--c-amber-300); }
+.cat-building  { background: var(--c-sky-900);     color: var(--c-sky-200); }
 
 /* Ultra debug panel */
 .ultra-debug-panel {

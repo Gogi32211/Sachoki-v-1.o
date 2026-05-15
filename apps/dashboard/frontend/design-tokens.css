@@ -1,0 +1,256 @@
+/* ============================================================================
+ * design-tokens.css — Sachoki design system, single source of truth.
+ *
+ * Anything visual the app uses MUST resolve to a token defined here:
+ *   - color palette          (`--c-*`)
+ *   - semantic surface roles (`--surface-*`, `--text-*`, `--border-*`)
+ *   - signal-family colors   (`--sig-*-bg`, `--sig-*-fg`, `--sig-*-ring`)
+ *   - typography             (`--font-*`, `--fz-*`, `--lh-*`)
+ *   - spacing                (`--sp-*`)
+ *   - radii / motion         (`--radius-*`, `--ease-*`)
+ *
+ * Rebranding = edit this file. Component CSS / JS must NOT hardcode hex.
+ * Signal-family color tokens are derived from old frontend/src/utils/signalBadges.js
+ * (Tailwind 800/900 backgrounds with 100/200/300/400 foregrounds) — kept as
+ * verbatim as possible so badges look identical to old Ultra.
+ * ============================================================================ */
+
+:root {
+  /* ── Tailwind-derived raw palette (do not use directly outside this file) ── */
+  --c-slate-100: #f1f5f9;  --c-slate-200: #e2e8f0;  --c-slate-700: #334155;
+  --c-gray-700:  #374151;
+  --c-red-200:   #fecaca;  --c-red-300:   #fca5a5;  --c-red-400:   #f87171;
+  --c-red-900:   #7f1d1d;
+  --c-orange-100:#ffedd5;  --c-orange-200:#fed7aa;  --c-orange-300:#fdba74;
+  --c-orange-400:#fb923c;  --c-orange-800:#9a3412;  --c-orange-900:#7c2d12;
+  --c-amber-100: #fef3c7;  --c-amber-200: #fde68a;  --c-amber-300: #fcd34d;
+  --c-amber-400: #fbbf24;  --c-amber-800: #92400e;  --c-amber-900: #78350f;
+  --c-yellow-100:#fef9c3;  --c-yellow-200:#fef08a;  --c-yellow-300:#fde047;
+  --c-yellow-400:#facc15;  --c-yellow-800:#854d0e;  --c-yellow-900:#713f12;
+  --c-lime-100:  #ecfccb;  --c-lime-300:  #bef264;  --c-lime-400:  #a3e635;
+  --c-lime-800:  #3f6212;  --c-lime-900:  #365314;
+  --c-green-100: #dcfce7;  --c-green-200: #bbf7d0;  --c-green-300: #86efac;
+  --c-green-400: #4ade80;  --c-green-800: #166534;  --c-green-900: #14532d;
+  --c-emerald-100:#d1fae5; --c-emerald-200:#a7f3d0; --c-emerald-300:#6ee7b7;
+  --c-emerald-400:#34d399; --c-emerald-800:#065f46; --c-emerald-900:#064e3b;
+  --c-teal-100:  #ccfbf1;  --c-teal-200:  #99f6e4;  --c-teal-300:  #5eead4;
+  --c-teal-400:  #2dd4bf;  --c-teal-800:  #115e59;  --c-teal-900:  #134e4a;
+  --c-cyan-100:  #cffafe;  --c-cyan-200:  #a5f3fc;  --c-cyan-300:  #67e8f9;
+  --c-cyan-400:  #22d3ee;  --c-cyan-800:  #155e75;  --c-cyan-900:  #164e63;
+  --c-sky-200:   #bae6fd;  --c-sky-300:   #7dd3fc;  --c-sky-400:   #38bdf8;
+  --c-sky-900:   #0c4a6e;
+  --c-blue-200:  #bfdbfe;  --c-blue-300:  #93c5fd;  --c-blue-400:  #60a5fa;
+  --c-blue-900:  #1e3a8a;
+  --c-violet-200:#ddd6fe;  --c-violet-300:#c4b5fd;  --c-violet-900:#4c1d95;
+  --c-purple-200:#e9d5ff;  --c-purple-900:#581c87;
+  --c-fuchsia-100:#fae8ff; --c-fuchsia-300:#f0abfc; --c-fuchsia-400:#e879f9;
+  --c-fuchsia-800:#86198f; --c-fuchsia-900:#701a75;
+  --c-pink-100:  #fce7f3;  --c-pink-300:  #f9a8d4;  --c-pink-400:  #f472b6;
+  --c-pink-800:  #9d174d;  --c-pink-900:  #831843;
+  --c-rose-200:  #fecdd3;  --c-rose-300:  #fda4af;  --c-rose-900:  #881337;
+
+  /* ── Semantic surface / text / border roles (dark theme) ───────────────── */
+  --surface-base:       #0d1117;
+  --surface-raised:     #161b22;
+  --surface-elevated:   #1c2128;
+  --surface-overlay:    #21262d;
+  --surface-high:       #2d333b;   /* fallback for "md-surface-high" badges */
+  --text-primary:       #e6edf3;
+  --text-secondary:     #c9d1d9;
+  --text-muted:         #8b949e;
+  --text-dim:           #6e7681;
+  --text-on-surface:    var(--text-secondary);
+  --text-on-surface-var:var(--text-muted);
+  --border-primary:     #30363d;
+  --border-secondary:   #21262d;
+  --border-accent:      #1f6feb;
+
+  /* ── Semantic up/down/neutral ──────────────────────────────────────────── */
+  --c-pos:    var(--c-green-400);
+  --c-neg:    var(--c-red-400);
+  --c-warn:   var(--c-amber-400);
+  --c-info:   var(--c-blue-400);
+  --c-accent: #1f6feb;
+
+  /* ── Signal-family badge tokens (mapping verbatim from old signalBadges.js) ─ */
+  /* T family: bg-green-900 / text-green-300 */
+  --sig-t-bg:           var(--c-green-900);
+  --sig-t-fg:           var(--c-green-300);
+
+  /* Z family: bg-red-900 / text-red-300 */
+  --sig-z-bg:           var(--c-red-900);
+  --sig-z-fg:           var(--c-red-300);
+  /* PREUP P2/P3/P50/P89 etc. live in Z row but bg-gray-700 / white */
+  --sig-preup-bg:       var(--c-gray-700);
+  --sig-preup-fg:       #ffffff;
+
+  /* L family — conditional sub-variants */
+  --sig-l-default-bg:   var(--c-blue-900);
+  --sig-l-default-fg:   var(--c-blue-300);
+  --sig-l-fri-bg:       var(--c-cyan-900);
+  --sig-l-fri-fg:       var(--c-cyan-300);
+  --sig-l-bl-bg:        var(--c-sky-900);
+  --sig-l-bl-fg:        var(--c-sky-300);
+  --sig-l-cci-bg:       var(--c-violet-900);
+  --sig-l-cci-fg:       var(--c-violet-300);
+  --sig-l-rl-bg:        var(--c-fuchsia-900);
+  --sig-l-rl-fg:        var(--c-fuchsia-300);
+  --sig-l-rh-bg:        var(--c-fuchsia-900);
+  --sig-l-rh-fg:        var(--c-fuchsia-400);
+  --sig-l-pp-bg:        var(--c-yellow-900);
+  --sig-l-pp-fg:        var(--c-yellow-300);
+  --sig-l-rose-bg:      var(--c-rose-900);
+  --sig-l-rose-fg:      var(--c-rose-300);
+  --sig-l-l2l4-bg:      var(--c-sky-900);
+  --sig-l-l2l4-fg:      #38bdf8;          /* sky-400 */
+  --sig-l-be-bg:        var(--c-emerald-900);
+  --sig-l-be-fg:        var(--c-emerald-300);
+  --sig-l-up-bg:        var(--c-lime-900);
+  --sig-l-up-fg:        var(--c-lime-300);
+  --sig-l-down-bg:      var(--c-red-900);
+  --sig-l-down-fg:      var(--c-red-400);
+  --sig-l-l88-bg:       var(--c-violet-900);
+  --sig-l-l88-fg:       var(--c-violet-200);
+
+  /* F family: bg-orange-900 / text-orange-300 */
+  --sig-f-bg:           var(--c-orange-900);
+  --sig-f-fg:           var(--c-orange-300);
+
+  /* FLY family: bg-purple-900 / text-purple-200 */
+  --sig-fly-bg:         var(--c-purple-900);
+  --sig-fly-fg:         var(--c-purple-200);
+
+  /* G family: bg-violet-900 / text-violet-200 */
+  --sig-g-bg:           var(--c-violet-900);
+  --sig-g-fg:           var(--c-violet-200);
+
+  /* B family: bg-amber-900 / text-amber-300 */
+  --sig-b-bg:           var(--c-amber-900);
+  --sig-b-fg:           var(--c-amber-300);
+
+  /* I (Combo) — conditional sub-variants */
+  --sig-i-default-bg:   var(--c-teal-900);
+  --sig-i-default-fg:   var(--c-teal-300);
+  --sig-i-rocket-bg:    var(--c-green-900);
+  --sig-i-rocket-fg:    var(--c-green-200);
+  --sig-i-best-bg:      var(--c-yellow-800);
+  --sig-i-best-fg:      var(--c-yellow-200);
+  --sig-i-strong-bg:    var(--c-emerald-900);
+  --sig-i-strong-fg:    var(--c-emerald-200);
+  --sig-i-match-bg:     var(--c-teal-900);
+  --sig-i-match-fg:     var(--c-teal-300);
+  --sig-i-vmul-bg:      var(--c-pink-900);
+  --sig-i-vmul-fg:      var(--c-pink-300);
+  --sig-i-up-bg:        var(--c-lime-900);
+  --sig-i-up-fg:        var(--c-lime-300);
+  --sig-i-down-bg:      var(--c-red-900);
+  --sig-i-down-fg:      var(--c-red-300);
+
+  /* WICK family */
+  --sig-wick-up-bg:     var(--c-sky-900);
+  --sig-wick-up-fg:     var(--c-sky-300);
+  --sig-wick-down-bg:   #7f1d1d80;        /* red-900/50 */
+  --sig-wick-down-fg:   var(--c-red-300);
+
+  /* SETUP family — ringed bold badges */
+  --sig-setup-a-bg:       #9a3412cc;       /* orange-800/80 */
+  --sig-setup-a-fg:       var(--c-orange-100);
+  --sig-setup-a-ring:     var(--c-orange-400);
+  --sig-setup-sm-bg:      #3f6212cc;       /* lime-800/80 */
+  --sig-setup-sm-fg:      var(--c-lime-100);
+  --sig-setup-sm-ring:    var(--c-lime-400);
+  --sig-setup-n-bg:       #155e75cc;       /* cyan-800/80 */
+  --sig-setup-n-fg:       var(--c-cyan-100);
+  --sig-setup-n-ring:     var(--c-cyan-400);
+  --sig-setup-mx-bg:      #9d174dcc;       /* pink-800/80 */
+  --sig-setup-mx-fg:      var(--c-pink-100);
+  --sig-setup-mx-ring:    var(--c-pink-400);
+  --sig-setup-abcd-bg:    #92400ecc;       /* amber-800/80 */
+  --sig-setup-abcd-fg:    var(--c-amber-100);
+  --sig-setup-abcd-ring:  var(--c-amber-400);
+  --sig-setup-default-bg: var(--surface-high);
+  --sig-setup-default-fg: var(--text-on-surface);
+
+  /* GOG family — ringed bold tier badges */
+  --sig-gog-p-bg:    var(--c-green-800);   --sig-gog-p-fg:   var(--c-green-100);   --sig-gog-p-ring:   var(--c-green-400);
+  --sig-gog-l-bg:    var(--c-emerald-800); --sig-gog-l-fg:   var(--c-emerald-100); --sig-gog-l-ring:   var(--c-emerald-400);
+  --sig-gog-c-bg:    var(--c-teal-800);    --sig-gog-c-fg:   var(--c-teal-100);    --sig-gog-c-ring:   var(--c-teal-400);
+  --sig-gog-base-bg: var(--c-fuchsia-800); --sig-gog-base-fg:var(--c-fuchsia-100); --sig-gog-base-ring:var(--c-fuchsia-400);
+
+  /* CTX family */
+  --sig-ctx-ldp-bg:    var(--c-green-900);  --sig-ctx-ldp-fg: var(--c-green-200);
+  --sig-ctx-ldc-bg:    var(--c-teal-900);   --sig-ctx-ldc-fg: var(--c-teal-200);
+  --sig-ctx-lds-bg:    var(--c-cyan-900);   --sig-ctx-lds-fg: var(--c-cyan-300);
+  --sig-ctx-sqb-bg:    var(--c-blue-900);   --sig-ctx-sqb-fg: var(--c-blue-200);
+  --sig-ctx-wrc-bg:    var(--c-slate-700);  --sig-ctx-wrc-fg: var(--c-slate-200);
+  --sig-ctx-default-bg:var(--surface-high); --sig-ctx-default-fg:var(--text-on-surface);
+
+  /* WLNBB vol-bucket pills (W L N B VB) */
+  --sig-wlnbb-w-bg:  var(--c-slate-700);   --sig-wlnbb-w-fg:  var(--c-slate-100);
+  --sig-wlnbb-l-bg:  var(--c-sky-900);     --sig-wlnbb-l-fg:  var(--c-sky-200);
+  --sig-wlnbb-n-bg:  var(--c-yellow-900);  --sig-wlnbb-n-fg:  var(--c-yellow-200);
+  --sig-wlnbb-b-bg:  var(--c-orange-900);  --sig-wlnbb-b-fg:  var(--c-orange-200);
+  --sig-wlnbb-vb-bg: var(--c-rose-900);    --sig-wlnbb-vb-fg: var(--c-rose-200);
+
+  /* ABR / ACTION / EMA / neutral fallback */
+  --sig-action-buy-bg:   #064e3b99;  --sig-action-buy-fg:   var(--c-emerald-200);  --sig-action-buy-ring:   var(--c-emerald-400);
+  --sig-action-watch-bg: #713f1299;  --sig-action-watch-fg: var(--c-yellow-200);   --sig-action-watch-ring: var(--c-yellow-400);
+  --sig-action-wait-bg:  #1e3a8a99;  --sig-action-wait-fg:  var(--c-blue-200);     --sig-action-wait-ring:  var(--c-blue-400);
+  --sig-action-late-bg:  #78350f99;  --sig-action-late-fg:  var(--c-amber-200);    --sig-action-late-ring:  var(--c-amber-400);
+  --sig-action-avoid-bg: #88133799;  --sig-action-avoid-fg: var(--c-rose-200);     --sig-action-avoid-ring: var(--c-rose-400, #fb7185);
+
+  --sig-abr-a-bg:  #064e3b80; --sig-abr-a-fg:  var(--c-emerald-200);
+  --sig-abr-bp-bg: #164e6380; --sig-abr-bp-fg: var(--c-cyan-200);
+  --sig-abr-b-bg:  #1e3a8a80; --sig-abr-b-fg:  var(--c-blue-200);
+  --sig-abr-r-bg:  #7f1d1d80; --sig-abr-r-fg:  var(--c-red-300);
+  --sig-abr-c-bg:  var(--surface-high); --sig-abr-c-fg: var(--text-on-surface-var);
+
+  --sig-ema-bg:    #064e3b80; --sig-ema-fg: var(--c-emerald-200);
+
+  --sig-neutral-bg: #ffffff0d;        /* bg-white/5 */
+  --sig-neutral-fg: var(--text-on-surface-var);
+  --sig-neutral-bo: #ffffff1a;        /* border-white/10 */
+
+  /* ── Typography ────────────────────────────────────────────────────────── */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --fz-xs:    0.65rem;
+  --fz-sm:    0.75rem;
+  --fz-base:  0.85rem;
+  --fz-md:    0.95rem;
+  --fz-lg:    1.05rem;
+  --fz-xl:    1.25rem;
+  --fz-2xl:   1.5rem;
+  --lh-tight: 1.2;
+  --lh-base:  1.4;
+  --lh-loose: 1.6;
+  --fw-regular: 400;
+  --fw-medium:  500;
+  --fw-semibold:600;
+  --fw-bold:    700;
+
+  /* ── Spacing scale (4px grid) ──────────────────────────────────────────── */
+  --sp-0: 0;
+  --sp-1: 2px;
+  --sp-2: 4px;
+  --sp-3: 6px;
+  --sp-4: 8px;
+  --sp-5: 12px;
+  --sp-6: 16px;
+  --sp-7: 24px;
+  --sp-8: 32px;
+  --sp-9: 48px;
+
+  /* ── Radii / borders / motion ──────────────────────────────────────────── */
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius:    4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-pill: 999px;
+  --border-w:  1px;
+  --ring-w:    1px;
+  --ease-out:  cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast:  120ms;
+  --dur-base:  200ms;
+}

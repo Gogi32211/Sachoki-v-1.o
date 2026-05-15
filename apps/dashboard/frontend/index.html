@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Sachoki</title>
+  <!-- Design system: tokens MUST come first so styles.css + signal-badges.css can read them -->
+  <link rel="stylesheet" href="/static/design-tokens.css" />
+  <link rel="stylesheet" href="/static/signal-badges.css" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
@@ -58,6 +61,8 @@
 
   <!-- lightweight-charts v4 (TradingView) — loaded before app.js -->
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <!-- Design system: badge resolver MUST load before app.js so renderers can call it -->
+  <script src="/static/signal-badges.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
