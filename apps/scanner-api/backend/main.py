@@ -688,8 +688,9 @@ def _synthetic_row(i: int, ticker: str) -> dict:
 
 def _build_summary_json(scan_result: dict) -> dict:
     candidates = scan_result["results"]
-    band_counts: dict[str, int] = {}
+    band_counts:   dict[str, int] = {}
     sector_counts: dict[str, int] = {}
+    signal_counts: dict[str, int] = {}
     top_score = 0
     for c in candidates:
         b = c.get("band") or "?"
@@ -699,10 +700,13 @@ def _build_summary_json(scan_result: dict) -> dict:
             sector_counts[s] = sector_counts.get(s, 0) + 1
         if (c.get("ultra_score") or 0) > top_score:
             top_score = c.get("ultra_score") or 0
+        for sig in (c.get("signals") or c.get("why_selected") or []):
+            if sig:
+                signal_counts[sig] = signal_counts.get(sig, 0) + 1
     return {
         "scan_mode":         scan_result["scan_mode"],
-        "data_provider":     "massive",
         "score_engine":      scan_result["score_engine"],
+        "data_provider":     "massive",
         "symbols_requested": scan_result["symbols_requested"],
         "symbols_scanned":   scan_result["symbols_scanned"],
         "symbols_failed":    scan_result["symbols_failed"],
@@ -710,6 +714,7 @@ def _build_summary_json(scan_result: dict) -> dict:
         "top_score":         top_score,
         "band_counts":       band_counts,
         "sector_counts":     sector_counts,
+        "signal_counts":     dict(sorted(signal_counts.items(), key=lambda x: -x[1])),
         "symbol_errors":     scan_result["errors"],
     }
 
