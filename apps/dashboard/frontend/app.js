@@ -493,6 +493,99 @@ const _FILTER_FAMILIES = [
 ];
 const _ultraSelectedFamilies = new Set();
 
+// CSV export of currently-filtered Ultra candidates with normalized payload.
+let _lastFilteredCandidates = [];
+function _csvCell(v) {
+  if (v == null) return "";
+  let s = typeof v === "object" ? JSON.stringify(v) : String(v);
+  if (/[",\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+function _exportUltraCSV() {
+  const rows = _lastFilteredCandidates;
+  if (!rows.length) { alert("No candidates to export."); return; }
+  const cols = [
+    "symbol", "sector", "industry", "price", "change_pct",
+    "ultra_score", "real_ultra_score", "signal_score",
+    "final_bull_score", "final_bear_score",
+    "band", "priority", "category", "sector_band",
+    "turbo_score", "rtb_phase", "rtb_total",
+    "pf", "cat", "signal_source",
+    "signals.t", "signals.z", "signals.l", "signals.f", "signals.fly",
+    "signals.g", "signals.b", "signals.i", "signals.ult",
+    "signals.vabs", "signals.wick", "signals.setup", "signals.gog", "signals.ctx",
+    "split.has_split", "split.has_reverse_split", "split.split_ratio",
+    "split.split_date", "split.phase", "split.wave",
+    "why_selected", "risk_flags", "ultra_active_signals",
+    "engines_ran", "engines_failed", "bar_date",
+  ];
+  const lines = [cols.join(",")];
+  for (const c of rows) {
+    const scores = c.scores || {};
+    const split  = c.split  || {};
+    const sigs   = c.signals || {};
+    const dbg    = c.engine_debug || {};
+    const get = path => {
+      const [head, tail] = path.split(".");
+      if (!tail) return c[head] ?? scores[head] ?? "";
+      const root = head === "split" ? split : head === "signals" ? sigs : {};
+      const v = root[tail];
+      return Array.isArray(v) ? v.join(" ") : v;
+    };
+    const row = cols.map(col => {
+      if (col === "engines_ran")    return _csvCell((dbg.engines_ran    ?? []).join(" "));
+      if (col === "engines_failed") return _csvCell((dbg.engines_failed ?? []).join(" "));
+      if (col === "why_selected")   return _csvCell((c.why_selected ?? []).join(" "));
+      if (col === "risk_flags")     return _csvCell((c.risk_flags   ?? []).join(" "));
+      if (col === "ultra_active_signals")
+        return _csvCell((c.ultra_active_signals ?? []).join(" "));
+      return _csvCell(get(col));
+    });
+    lines.push(row.join(","));
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url;
+  a.download = `ultra_candidates_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function _toggleUltraDebug() {
+  const panel = $("ultraDebugPanel");
+  if (!panel) return;
+  const isHidden = panel.style.display === "none";
+  if (!isHidden) { panel.style.display = "none"; return; }
+
+  // Aggregate engine_debug + signal_source across visible candidates.
+  const rows = _lastFilteredCandidates;
+  const sourceCounts = {};
+  const engineRanCounts = {};
+  const engineFailedCounts = {};
+  for (const c of rows) {
+    const src = c.signal_source || "(unset)";
+    sourceCounts[src] = (sourceCounts[src] ?? 0) + 1;
+    const dbg = c.engine_debug || {};
+    for (const e of (dbg.engines_ran    ?? [])) engineRanCounts[e]    = (engineRanCounts[e]    ?? 0) + 1;
+    for (const e of (dbg.engines_failed ?? [])) engineFailedCounts[e] = (engineFailedCounts[e] ?? 0) + 1;
+  }
+  const fmt = (obj) => Object.entries(obj).sort((a,b) => b[1]-a[1])
+    .map(([k,v]) => `<span class="chip" style="font-size:.65rem">${esc(k)} <b>${v}</b></span>`).join(" ");
+
+  panel.innerHTML = `
+    <div class="dbg-row"><b>signal_source (real vs proxy):</b> ${fmt(sourceCounts) || "—"}</div>
+    <div class="dbg-row"><b>engines_ran:</b> ${fmt(engineRanCounts) || "—"}</div>
+    <div class="dbg-row"><b>engines_failed:</b> ${fmt(engineFailedCounts) || "—"}</div>
+    <div class="dbg-row" style="color:var(--text-dim);font-size:.7rem">
+      Source-of-truth check: every candidate above is scored from
+      engine_registry output, not inferred proxies (signal_source=engine_registry).
+      Super Chart History reads the same payload — clicking a row's <b>chart</b>
+      button opens the matching Super Chart bars.
+    </div>`;
+  panel.style.display = "";
+}
+
 function _refreshFamilyChips() {
   document.querySelectorAll(".family-chip[data-family]").forEach(btn => {
     const active = _ultraSelectedFamilies.has(btn.dataset.family);
@@ -593,8 +686,11 @@ async function renderUltra() {
           </select>
         </label>
         <button class="btn-clear" id="clearFilters">Clear</button>
+        <button class="btn-clear" id="exportCsvBtn" title="Export filtered candidates to CSV">⬇ CSV</button>
+        <button class="btn-clear" id="debugPanelBtn" title="Toggle debug panel">⚙ Debug</button>
         <span class="filter-count" id="filterCount"></span>
       </div>
+      <div id="ultraDebugPanel" class="ultra-debug-panel" style="display:none"></div>
       <div class="filter-families" id="filterFamilies">
         <span class="filter-families-label">Signal family:</span>
         ${_FILTER_FAMILIES.map(f =>
@@ -647,6 +743,11 @@ async function renderUltra() {
   });
   _refreshFamilyChips();
 
+  const expBtn = $("exportCsvBtn");
+  if (expBtn) expBtn.addEventListener("click", _exportUltraCSV);
+  const dbgBtn = $("debugPanelBtn");
+  if (dbgBtn) dbgBtn.addEventListener("click", _toggleUltraDebug);
+
   // Restore running state if scan was in progress before navigation
   if (_scanRunning) {
     _setProgressVisible(true);
@@ -694,6 +795,7 @@ function applyUltraFilters() {
     return true;
   });
 
+  _lastFilteredCandidates = filtered;
   const fc = $("filterCount");
   if (fc) fc.textContent = `${filtered.length} / ${_ultraCandidates.length} shown`;
   renderCandidateTable(filtered);

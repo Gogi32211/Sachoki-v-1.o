@@ -517,6 +517,15 @@ tbody tr:last-child { border-bottom: none; }
 .family-clear { background: transparent; color: var(--text-dim); }
 .family-clear:hover { color: var(--text); }
 
+/* Ultra debug panel */
+.ultra-debug-panel {
+  margin: 6px 12px 12px; padding: 10px 12px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); font-size: .75rem;
+}
+.ultra-debug-panel .dbg-row { margin-bottom: 6px; }
+.ultra-debug-panel b { color: var(--text2); font-weight: 600; }
+
 /* ── Ultra Scan Controls ──────────────────────────────────────────────────── */
 .scan-controls-card {
   background: var(--surface); border: 1px solid var(--border);
