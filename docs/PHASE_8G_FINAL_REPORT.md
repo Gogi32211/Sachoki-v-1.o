@@ -4,16 +4,30 @@
 **Span:** commits `92ed312` (commit 1) → `03d8df0` (commit 10), plus this report
 **Goal:** make the new scanner architecture the single source of truth, restore old Ultra signal families/scoring/split/filters/Super Chart parity.
 
-> **Status (post-verification gate):**
+> **Status (post-verification gate + post-Turbo/RTB audit):**
 > ```
 > ARCHITECTURE_SYNC_DONE
 > OLD_ULTRA_PARITY_PARTIAL
 > REAL_DATA_VERIFICATION_REQUIRED
+> TURBO_AND_RTB_REGRESSION_FOUND        ← see PHASE_8I_ULTRA_TURBO_RTB_AUDIT.md
 > ```
 > See `docs/PHASE_8G_VERIFICATION_GATE.md` for the formal in-process old-vs-new
 > engine parity proof (678/678 columns match on 6 synthetic scenarios) and the
 > list of items requiring staging access (real ticker fetch + reference old-Ultra
 > output) before this branch may merge to `main`.
+>
+> **⚠️ The Phase 8G handling of `turbo_score` (aliased to `ultra_score`) and
+> `rtb_phase` (tier-approximated from GOG) is formally proven WRONG by the
+> Phase 8I audit:**
+> - Old `UltraScanPanel.jsx:832` uses `turbo_score` as the PRIMARY sort key.
+> - Old `_calc_turbo_score` reads `rtb_phase`/`rtb_transition` as direct
+>   scoring inputs ([backend/turbo_engine.py:518-594](backend/turbo_engine.py:518)).
+> - Old `calc_rtb_v4` is a stateful 690-line engine; the tier approximation
+>   is fictitious.
+>
+> Phase 8I must port the real `rtb_engine` and `_calc_turbo_score` before any
+> merge to `main`. Marked here so the §15 "formula changes" disclosure cannot
+> be cited without this correction.
 >
 > Title of this document says "Final Report" only in the sense of "final report
 > for the Phase 8G migration commits"; it does **not** mean old-Ultra parity
