@@ -157,6 +157,7 @@ def run_engines(
     g_df     = _run_engine(idf, engines_ran, engines_failed, "g",   _import_g)
     u260_df  = _run_engine(idf, engines_ran, engines_failed, "ult260", _import_u260)
     uv2_df   = _run_engine(idf, engines_ran, engines_failed, "ult_v2", _import_uv2)
+    delta_df = _run_engine(idf, engines_ran, engines_failed, "delta",  _import_delta)
 
     # GOG depends on every prior engine's output. Run last; pass None safely.
     gog_df = _run_gog(idf, tz_df, wl_df, f_df, vabs_df, u260_df, uv2_df, combo_df,
@@ -298,6 +299,7 @@ def run_engines(
                 combo_df=combo_df, f_df=f_df, fly_df=fly_df,
                 b_df=b_df, g_df=g_df,
                 u260_df=u260_df, uv2_df=uv2_df, gog_df=gog_df,
+                delta_df=delta_df,
             )
 
             # 1) RTB v4 — stateful per-bar phase engine
@@ -322,6 +324,30 @@ def run_engines(
 
             # 2) Turbo score — verbatim _calc_turbo_score formula
             turbo_score = compute_turbo_score(trow, profile=turbo_profile)
+            trow["turbo_score"] = turbo_score
+
+            # 2b) Phase 8J — profile_playbook (Pf, Cat, sweet_spot_active,
+            #     late_warning) + canonical_score + beta_engine. Run AFTER
+            #     turbo_score (canonical reads it) but BEFORE ultra_score
+            #     (ultra reads profile_score). Each is wrapped so a single
+            #     engine failure doesn't break the whole bar.
+            try:
+                from .chart_profile_playbook import enrich_row_with_profile
+                trow = enrich_row_with_profile(trow, turbo_profile)
+            except Exception as exc:
+                log.debug("profile_playbook failed at pos=%d: %s", pos, exc)
+            try:
+                from .chart_canonical_scoring_engine import compute_canonical_score
+                canon = compute_canonical_score(trow, turbo_profile)
+                trow.update(canon)
+            except Exception as exc:
+                log.debug("canonical_score failed at pos=%d: %s", pos, exc)
+            try:
+                from .chart_beta_engine import calc_beta_score
+                beta = calc_beta_score(trow, rtb_history, universe=turbo_profile)
+                trow.update(beta)
+            except Exception as exc:
+                log.debug("beta_engine failed at pos=%d: %s", pos, exc)
 
             # 3) Surface into bar.scores
             scores = bar["scores"]
@@ -335,6 +361,20 @@ def run_engines(
             scores["rtb_late"]       = rtb["rtb_late"]
             scores["rtb_transition"] = rtb["rtb_transition"]
             scores["rtb_phase_age"]  = rtb["rtb_phase_age"]
+
+            # Phase 8J fields: profile + beta. profile_playbook sets
+            # profile_score / profile_category / sweet_spot_active /
+            # late_warning on trow. beta_engine sets beta_score / beta_zone /
+            # beta_setup / beta_momentum / beta_auto_buy / beta_raw.
+            scores["pf"]                = trow.get("profile_score")
+            scores["category"]          = trow.get("profile_category") or ""
+            scores["cat"]               = trow.get("profile_category") or ""
+            scores["sweet_spot_active"] = bool(trow.get("sweet_spot_active"))
+            scores["late_warning"]      = bool(trow.get("late_warning"))
+            scores["beta_score"]        = trow.get("beta_score")
+            scores["beta_zone"]         = trow.get("beta_zone") or ""
+            scores["beta_setup"]        = trow.get("beta_setup")
+            scores["beta_momentum"]     = trow.get("beta_momentum")
 
             # 4) Stash the fully-populated row on the bar so downstream
             #    scoring (ultra_score) can run on the SAME row that produced
@@ -481,6 +521,11 @@ def _import_u260():
 def _import_uv2():
     from .chart_ultra_engine import compute_ultra_v2
     return compute_ultra_v2
+
+
+def _import_delta():
+    from .chart_delta_engine import compute_delta
+    return compute_delta
 
 
 def _run_gog(idf, tz_df, wl_df, f_df, vabs_df, u260_df, uv2_df, combo_df,

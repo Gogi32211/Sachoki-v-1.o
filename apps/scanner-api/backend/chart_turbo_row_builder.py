@@ -92,7 +92,7 @@ _RECENT_FLAGS: list[tuple[str, str, str, int]] = [
     ("_l22_recent_15b",      "wlnbb", "L22", 15),
     ("_l43_recent_10b",      "wlnbb", "L43", 10),
     ("_ns_recent_5b",        "vabs",  "ns",  5),
-    ("_dabsorb_recent_5b",   None,    None,  5),   # delta engine missing — always False
+    ("_dabsorb_recent_5b",   "delta", "absorb_bull", 5),
     # Ztrap: Z9/Z10/Z11/Z12 in tz_df.sig_name. Handled inline below.
     ("_ztrap_recent_5b",     None,    None,  5),
     ("_ztrap_recent_15b",    None,    None, 15),
@@ -149,6 +149,7 @@ def build_turbo_row(
     u260_df:  pd.DataFrame | None = None,
     uv2_df:   pd.DataFrame | None = None,
     gog_df:   pd.DataFrame | None = None,
+    delta_df: pd.DataFrame | None = None,
 ) -> dict:
     """
     Build the flat row dict for bar `pos` (integer location in idf.index).
@@ -213,6 +214,25 @@ def build_turbo_row(
         for k in keys:
             row[k] = _scalar_bool(bar.get(k))
 
+    # Delta → row keys with d_ prefix (mapping in chart_delta_engine.DELTA_TO_TURBO_ROW)
+    if delta_df is not None and not delta_df.empty and pos < len(delta_df):
+        dbar = delta_df.iloc[pos]
+        try:
+            from .chart_delta_engine import DELTA_TO_TURBO_ROW
+        except Exception:
+            DELTA_TO_TURBO_ROW = {}
+        for src, dst in DELTA_TO_TURBO_ROW.items():
+            row[dst] = _scalar_bool(dbar.get(src))
+        # Also expose raw delta value for diagnostics
+        try:
+            row["delta"] = float(dbar.get("delta") or 0)
+        except Exception:
+            row["delta"] = 0.0
+    else:
+        from .chart_delta_engine import DELTA_TO_TURBO_ROW
+        for dst in DELTA_TO_TURBO_ROW.values():
+            row.setdefault(dst, False)
+
     # GOG → akan_sig / smx_sig / nnn_sig / mx_sig / gog_sig
     if gog_df is not None and not gog_df.empty and pos < len(gog_df):
         gbar = gog_df.iloc[pos]
@@ -225,31 +245,26 @@ def build_turbo_row(
         row.setdefault("gog_sig", False)
 
     # Recent-N lookback flags
+    _eng_to_df = {"wlnbb": wl_df, "vabs": vabs_df, "delta": delta_df,
+                  "combo": combo_df}
     for key, eng, src, n in _RECENT_FLAGS:
-        if eng == "wlnbb":
-            row[key] = _df_recent(wl_df, src, pos, n)
-        elif eng == "vabs":
-            row[key] = _df_recent(vabs_df, src, pos, n)
-        else:
-            row[key] = False
+        df_for_eng = _eng_to_df.get(eng)
+        row[key] = _df_recent(df_for_eng, src, pos, n) if df_for_eng is not None else False
     # Ztrap (Z9/Z10/Z11/Z12) + T10/11/12 from tz_df.sig_name
     row["_ztrap_recent_5b"]  = _tz_sig_recent(tz_df, pos,  5, _ZTRAP_SET)
     row["_ztrap_recent_15b"] = _tz_sig_recent(tz_df, pos, 15, _ZTRAP_SET)
     row["_t10t11_recent_5b"] = _tz_sig_recent(tz_df, pos,  5, _T10T11_SET)
 
-    # Wick-X / PARA / Delta / preup55/66 — not produced by current engines.
-    # All default to False (set on first read above). No further action needed.
+    # Engines we have NOT yet ported — keys default to False so scoring formulas
+    # that read them treat them as "absent" (= no contribution).
+    # Delta keys are now filled by the delta_df branch above.
     for k in ("x1_wick", "x1g_wick", "x2_wick", "x2g_wick", "x3_wick",
               "wick_bull",
               "para_retest", "para_plus", "para_start", "para_prep",
-              "d_blast_bull", "d_surge_bull", "d_strong_bull",
-              "d_absorb_bull", "d_spring", "d_div_bull",
-              "d_vd_div_bull", "d_cd_bull",
               "preup55", "preup66",
               "tz_bull_flip", "tz_attempt", "tz_weak_bull",
               "seq_bcont", "rs", "rs_strong",
               "cd", "ca", "cw",
-              # PRE_PUMP populated above via _WLNBB_RENAME; "pp" alias too
               ):
         row.setdefault(k, False)
 

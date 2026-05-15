@@ -781,9 +781,10 @@ async function renderUltra() {
             <th>Symbol</th>
             <th title="Turbo score (0-100). Primary sort key, score-band filter.">Score</th>
             <th title="Ultra score banded A+/A/B/C/D">ULTRA</th>
+            <th title="BETA score + zone (beta_engine)">BETA</th>
             <th>RTB</th>
             <th>T/Z</th>
-            <th>Cat</th>
+            <th title="Profile category (profile_playbook): SWEET_SPOT / BUILDING / WATCH / LATE">Cat</th>
             <th class="td-signals">Signals</th>
             <th>RSI</th>
             <th>CCI</th>
@@ -989,7 +990,7 @@ function renderCandidateTable(candidates) {
   const body = $("candidatesBody");
   if (!body) return;
   if (!candidates.length) {
-    body.innerHTML = `<tr class="empty-row"><td colspan="15">No candidates match the current filters.</td></tr>`;
+    body.innerHTML = `<tr class="empty-row"><td colspan="16">No candidates match the current filters.</td></tr>`;
     return;
   }
   body.innerHTML = candidates.map((c, i) => {
@@ -1011,7 +1012,11 @@ function renderCandidateTable(candidates) {
     const band  = c.band || scores.band || "";
     const rtb   = scores.rtb_phase || "";
     const tz    = _firstSignal(signals, "t") || _firstSignal(signals, "z");
-    const cat   = scores.category || c.category || "";   // SWEET / WATCH / BUILDING when profile_playbook lands
+    // Phase 8J — profile_playbook + beta_engine now populate these
+    const cat       = scores.category   || c.category || "";   // SWEET_SPOT / BUILDING / WATCH / LATE
+    const pf        = scores.pf ?? c.pf ?? null;
+    const betaScore = scores.beta_score ?? null;
+    const betaZone  = scores.beta_zone  || "";
     const sigs  = _renderSignalString(signals);
     const rsi   = ind.rsi != null ? fmt(ind.rsi, 0) : "—";
     const cci   = ind.cci != null ? fmt(ind.cci, 0) : "—";
@@ -1020,8 +1025,13 @@ function renderCandidateTable(candidates) {
     const splitTxt = _formatSplitLifecycle(c.split || {});
 
     const tzBadge  = tz  ? SignalBadges.renderSignalBadge(tz)  : "—";
-    const catBadge = cat ? `<span class="chip cat-${esc(cat.toLowerCase())}">${esc(cat)}</span>` : "—";
+    const catBadge = cat ? `<span class="chip cat-${esc(cat.toLowerCase().replace('_','-'))}">${esc(cat)}${pf != null ? ` ${fmt(pf,0)}` : ""}</span>` : "—";
     const rtbBadge = rtb ? `<span class="rtb-pill ${_rtbCellClass(rtb)}">${esc(rtb)}</span>` : "—";
+    const betaCell = betaScore == null ? "—" :
+                     `<div class="beta-cell">
+                       <div class="beta-num">${fmt(betaScore, 0)}</div>
+                       <div class="beta-zone beta-zone-${esc(betaZone.toLowerCase().replace('_','-'))}">${esc(betaZone)}</div>
+                     </div>`;
 
     // Turbo tier emoji (matches old UltraScanPanel: 65+ 🔥, 50+ ★, 35+ ▲)
     const turboTier = turbo == null ? "" :
@@ -1046,6 +1056,7 @@ function renderCandidateTable(candidates) {
       <td class="td-sym">★ ${esc(c.symbol)}</td>
       <td class="td-score">${turboCell}</td>
       <td class="td-ultra">${ultraCell}</td>
+      <td class="td-beta">${betaCell}</td>
       <td class="td-rtb">${rtbBadge}</td>
       <td class="td-tz">${tzBadge}</td>
       <td class="td-cat">${catBadge}</td>

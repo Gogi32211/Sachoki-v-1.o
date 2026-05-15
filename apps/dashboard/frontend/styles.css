@@ -604,10 +604,24 @@ tbody tr:last-child { border-bottom: none; }
 .rtb-pill.rtb-d { background: var(--c-rose-900);    color: var(--c-rose-300); }
 .rtb-pill.rtb-none { background: transparent; color: var(--text-dim); box-shadow: none; }
 
-/* Category chip (Pf/Cat — placeholder shapes; populate once profile_playbook lands) */
-.cat-sweet     { background: var(--c-yellow-900);  color: var(--c-yellow-200); }
-.cat-watch     { background: var(--c-amber-900);   color: var(--c-amber-300); }
-.cat-building  { background: var(--c-sky-900);     color: var(--c-sky-200); }
+/* Category chip (profile_playbook output — SWEET_SPOT / BUILDING / WATCH / LATE) */
+.cat-sweet-spot { background: var(--c-yellow-900); color: var(--c-yellow-200); font-weight: var(--fw-bold); }
+.cat-building   { background: var(--c-sky-900);    color: var(--c-sky-200); }
+.cat-watch      { background: var(--c-amber-900);  color: var(--c-amber-300); }
+.cat-late       { background: var(--c-rose-900);   color: var(--c-rose-300); }
+
+/* BETA score + zone cell (beta_engine output) */
+.beta-cell      { display: flex; flex-direction: column; align-items: center; line-height: 1.1; }
+.beta-num       { font-family: var(--font-mono); font-weight: var(--fw-bold); font-size: var(--fz-sm); }
+.beta-zone      { font-size: 0.55rem; font-weight: var(--fw-semibold); text-transform: uppercase; letter-spacing: 0.04em; }
+.beta-zone-elite       { color: var(--c-amber-300); }
+.beta-zone-optimal     { color: var(--c-emerald-300); }
+.beta-zone-buy         { color: var(--c-blue-300); }
+.beta-zone-watch       { color: var(--c-violet-300); }
+.beta-zone-building    { color: var(--c-yellow-300); }
+.beta-zone-extended    { color: var(--c-amber-200); }
+.beta-zone-short-watch { color: var(--c-red-400); }
+.beta-zone-neutral     { color: var(--text-muted); }
 
 /* Ultra debug panel */
 .ultra-debug-panel {
