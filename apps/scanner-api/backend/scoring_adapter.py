@@ -119,7 +119,7 @@ def compute_scanner_ultra_candidate(
 
     Returns:
         Candidate dict in the same shape as score_candidate(), scored by
-        the real Ultra engine. score_engine field is "ultra_phase_7A".
+        the real Ultra engine. score_engine field is "real_ultra_score".
     """
     from .ultra_score import compute_ultra_score
 
@@ -151,9 +151,10 @@ def compute_scanner_ultra_candidate(
         "rsi":       signals.get("rsi"),
         "vol_ratio": signals.get("vol_ratio"),
         "mom5d_pct": signals.get("mom5d_pct"),
-        # Reasons and flags from real scorer
+        # Reasons, signals, and flags from real scorer
         "ultra_score_reasons": scored["ultra_score_reasons"],
         "why_selected":        scored["ultra_score_reasons"],
+        "signals":             scored["ultra_score_reasons"],   # active Ultra signal tokens
         "ultra_score_flags":   scored["ultra_score_flags"],
         "risk_flags":          scored["ultra_score_flags"],
         # Scoring diagnostics
@@ -172,6 +173,6 @@ def compute_scanner_ultra_candidate(
         # Metadata
         "score_engine":   SCORE_ENGINE,
         "data_provider":  "massive",
-        "source":         "scanner-api-ultra-real",
+        "source":         "scanner-api-real-ultra",
         "timeframe":      timeframe,
     }
