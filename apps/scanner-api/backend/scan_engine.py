@@ -1,10 +1,11 @@
 """
-scan_engine.py — Phase 5A controlled Ultra scan engine.
+scan_engine.py — Phase 7A controlled Ultra scan engine.
 
 Standalone module — zero imports from root backend/.
 Uses Massive API (same provider as production) for OHLCV data.
-All scores are explicitly marked score_engine="temporary_phase_5A".
-No scheduler. No full-market scan. Max 20 symbols.
+Supports scoring_mode: "temporary" (rule-based), "real" (ultra_score),
+or "compare" (both, stores comparison data).
+No scheduler. No full-market scan. Max 500 symbols.
 """
 from __future__ import annotations
 
@@ -28,7 +29,9 @@ DEFAULT_SYMBOLS: list[str] = [
 ]
 MAX_SYMBOLS        = 20
 ALLOWED_TIMEFRAMES = ["1d"]
-SCORE_ENGINE       = "temporary_phase_5A"
+SCORE_ENGINE_TEMP  = "temporary_phase_5A"
+SCORE_ENGINE_REAL  = "ultra_phase_7A"
+SCORE_ENGINE       = SCORE_ENGINE_TEMP  # default — overridden per run by scoring_mode
 
 _MASSIVE_BASE = os.environ.get("MASSIVE_BASE", "https://api.massive.com")
 _SPAN = {
@@ -298,12 +301,14 @@ def run_controlled_scan(
     timeframe:         str  = "1d",
     universe:          str  = "manual_test",
     scan_mode:         str  = "controlled_test",
+    scoring_mode:      str  = "temporary",   # temporary | real | compare
     progress_callback  = None,  # callable(i, sym, results, errors) → None
     cancel_event       = None,  # threading.Event; checked between symbols
 ) -> dict:
     """
     Run a controlled scan for the given symbol list via Massive API.
     Returns results dict — caller is responsible for DB writes.
+    scoring_mode: "temporary" = rule-based, "real" = Ultra scorer, "compare" = both.
     progress_callback is called before each symbol with current counts.
     cancel_event is checked between symbols; sets result["cancelled"]=True if fired.
     """
@@ -338,16 +343,43 @@ def run_controlled_scan(
             if not signals:
                 errors.append({"symbol": sym, "stage": "compute_signals", "error": "Signal computation failed"})
                 continue
-            candidate = score_candidate(sym, signals)
+
+            if scoring_mode == "real":
+                from .scoring_adapter import compute_scanner_ultra_candidate
+                candidate = compute_scanner_ultra_candidate(sym, signals, timeframe=timeframe, df=df)
+            elif scoring_mode == "compare":
+                from .scoring_adapter import compute_scanner_ultra_candidate
+                temp = score_candidate(sym, signals)
+                real = compute_scanner_ultra_candidate(sym, signals, timeframe=timeframe, df=df,
+                                                       temp_candidate=temp)
+                candidate = real.copy()
+                candidate["compare"] = {
+                    "temp_score":  temp["ultra_score"],
+                    "temp_band":   temp["band"],
+                    "temp_why":    temp.get("why_selected", []),
+                    "real_score":  real["ultra_score"],
+                    "real_band":   real["band"],
+                    "real_why":    real.get("why_selected", []),
+                    "delta_score": real["ultra_score"] - temp["ultra_score"],
+                }
+            else:  # temporary (default)
+                candidate = score_candidate(sym, signals)
+
             candidate["timeframe"] = timeframe
             results.append(candidate)
-            log.info("scanned %s → score=%s band=%s", sym, candidate["ultra_score"], candidate["band"])
+            log.info("scanned %s → score=%s band=%s engine=%s",
+                     sym, candidate["ultra_score"], candidate["band"], scoring_mode)
         except Exception as exc:
             log.warning("scan error for %s: %s", sym, exc)
             errors.append({"symbol": sym, "stage": "unknown", "error": type(exc).__name__})
 
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     results.sort(key=lambda x: x.get("ultra_score", 0), reverse=True)
+
+    engine_label = {
+        "real":    SCORE_ENGINE_REAL,
+        "compare": f"{SCORE_ENGINE_TEMP}+{SCORE_ENGINE_REAL}",
+    }.get(scoring_mode, SCORE_ENGINE_TEMP)
 
     return {
         "results":           results,
@@ -358,7 +390,8 @@ def run_controlled_scan(
         "candidates_saved":  len(results),
         "elapsed_ms":        elapsed_ms,
         "started_at":        started.isoformat(),
-        "score_engine":      SCORE_ENGINE,
+        "score_engine":      engine_label,
+        "scoring_mode":      scoring_mode,
         "universe":          universe,
         "timeframe":         timeframe,
         "scan_mode":         scan_mode,

@@ -1,9 +1,10 @@
 """
-scanner-api — Phase 5C: async bounded scan with Redis progress.
+scanner-api — Phase 7A: real Ultra scorer + compare mode.
 
-POST /api/scans/ultra/run starts scan in background (BackgroundTasks),
-returns run_id immediately. Progress tracked in Redis (in-memory fallback).
-Max 500 symbols. Cancel endpoint added. DB remains source of truth.
+Adds scoring_mode (temporary/real/compare) to ScanRequest.
+Real mode uses the production compute_ultra_score() engine via scoring_adapter.
+Compare mode runs both engines and stores delta in candidate.compare field.
+Debug endpoint GET /api/debug/score-compare returns a side-by-side for one symbol.
 Scheduler and full-market scan remain disabled.
 """
 from __future__ import annotations
@@ -23,10 +24,10 @@ from pydantic import BaseModel, field_validator
 log = logging.getLogger(__name__)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "info").upper())
 
-app = FastAPI(title="scanner-api", version="0.7.0")
+app = FastAPI(title="scanner-api", version="0.8.0")
 
-_VERSION = "0.7.0"
-_PHASE   = "5C-async-scan"
+_VERSION = "0.8.0"
+_PHASE   = "7A-real-scorer"
 
 # Known Ultra Scan table names (confirmed from backend/ultra_scan_migration.py)
 _RUN_TABLE  = "ultra_scan_runs"
@@ -78,11 +79,15 @@ _current_run_id: int | None = None
 _cancel_event   = threading.Event()  # set to request cancel between symbols
 
 
+_ALLOWED_SCORING_MODES = {"temporary", "real", "compare"}
+
+
 class ScanRequest(BaseModel):
     symbols:        list[str] = _DEFAULT_SYMBOLS
     timeframe:      str       = "1d"
     universe:       str       = "manual_test"
     scan_mode:      str       = "controlled_test"
+    scoring_mode:   str       = "temporary"   # temporary | real | compare
     replace_latest: bool      = True
     dry_run:        bool      = False
 
@@ -93,7 +98,7 @@ class ScanRequest(BaseModel):
         if not cleaned:
             raise ValueError("symbols list must not be empty.")
         if len(cleaned) > _MAX_SYMBOLS:
-            raise ValueError(f"Phase 5C controlled async scan allows max {_MAX_SYMBOLS} symbols.")
+            raise ValueError(f"Controlled async scan allows max {_MAX_SYMBOLS} symbols.")
         return cleaned
 
     @field_validator("timeframe")
@@ -111,6 +116,13 @@ class ScanRequest(BaseModel):
                 f"universe must be one of: {sorted(_ALLOWED_UNIVERSES)}. "
                 "Full-market universes (full_sp500, full_nasdaq, all_us) are not allowed."
             )
+        return v
+
+    @field_validator("scoring_mode")
+    @classmethod
+    def check_scoring_mode(cls, v: str) -> str:
+        if v not in _ALLOWED_SCORING_MODES:
+            raise ValueError(f"scoring_mode must be one of: {sorted(_ALLOWED_SCORING_MODES)}")
         return v
 
 
@@ -347,6 +359,81 @@ def debug_db():
         "candidate_tables":     candidate_tables,
         "scan_run_tables":      scan_run_tables,
         "notes":                notes,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Score compare debug endpoint (Phase 7A)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/debug/score-compare")
+def debug_score_compare(
+    symbol: str = Query(default="AAPL"),
+    tf: str = Query(default="1d"),
+):
+    """
+    Fetch live bars for one symbol and compute both temporary and real scores.
+    Returns a side-by-side comparison without writing to the database.
+    """
+    from .scan_engine import fetch_bars, compute_signals, score_candidate
+    from .scoring_adapter import compute_scanner_ultra_candidate
+
+    sym = symbol.upper().strip()
+
+    df = fetch_bars(sym, interval=tf)
+    if df is None:
+        return JSONResponse(
+            status_code=422,
+            content={"error": f"Could not fetch bars for {sym} ({tf}). Check MASSIVE_API_KEY."},
+        )
+
+    signals = compute_signals(df)
+    if not signals:
+        return JSONResponse(
+            status_code=422,
+            content={"error": f"Signal computation failed for {sym}."},
+        )
+
+    temp = score_candidate(sym, signals)
+    real = compute_scanner_ultra_candidate(sym, signals, timeframe=tf, df=df)
+
+    return {
+        "symbol":    sym,
+        "timeframe": tf,
+        "signals": {
+            "price":             signals.get("price"),
+            "rsi":               signals.get("rsi"),
+            "ema20":             signals.get("ema20"),
+            "ema50":             signals.get("ema50"),
+            "vol_ratio":         signals.get("vol_ratio"),
+            "mom5d_pct":         signals.get("mom5d_pct"),
+            "price_above_ema20": signals.get("price_above_ema20"),
+            "price_above_ema50": signals.get("price_above_ema50"),
+            "ema20_above_ema50": signals.get("ema20_above_ema50"),
+            "ema_cross_up_5d":   signals.get("ema_cross_up_5d"),
+        },
+        "temporary": {
+            "score":        temp["ultra_score"],
+            "band":         temp["band"],
+            "why_selected": temp.get("why_selected", []),
+            "risk_flags":   temp.get("risk_flags", []),
+            "engine":       temp.get("score_engine"),
+        },
+        "real": {
+            "score":                    real["ultra_score"],
+            "band":                     real["band"],
+            "why_selected":             real.get("why_selected", []),
+            "risk_flags":               real.get("risk_flags", []),
+            "raw_before_penalty":       real.get("ultra_score_raw_before_penalty"),
+            "penalty_total":            real.get("ultra_score_penalty_total"),
+            "regime_bonus":             real.get("ultra_score_regime_bonus"),
+            "caps_applied":             real.get("ultra_score_caps_applied", []),
+            "engine":                   real.get("score_engine"),
+        },
+        "delta": {
+            "score_diff": real["ultra_score"] - temp["ultra_score"],
+            "band_diff":  real["band"] != temp["band"],
+        },
     }
 
 
@@ -768,6 +855,7 @@ def _run_scan_background(
             timeframe=req.timeframe,
             universe=req.universe,
             scan_mode=req.scan_mode,
+            scoring_mode=req.scoring_mode,
             progress_callback=_on_progress,
             cancel_event=_cancel_event,
         )
@@ -1034,13 +1122,16 @@ def debug_scan_config():
         "full_market_scan_enabled": False,
         "async_scan":               True,
         "redis_progress":           _prog.redis_available(),
-        "score_engine":             "temporary_phase_5A",
+        "scoring_modes":            sorted(_ALLOWED_SCORING_MODES),
+        "default_scoring_mode":     "temporary",
+        "score_engine_temporary":   "temporary_phase_5A",
+        "score_engine_real":        "ultra_phase_7A",
         "notes": [
-            "Phase 5C: async bounded scan, max 500 symbols.",
-            "Scan starts immediately and runs in background.",
-            "Poll GET /api/scans/ultra/status?run_id=<id> for progress.",
-            "dry_run=true validates without fetching or writing.",
-            "POST /api/scans/ultra/cancel to request stop.",
+            "Phase 7A: real Ultra scorer available via scoring_mode=real|compare.",
+            "scoring_mode=temporary: rule-based EMA/RSI/volume scorer (safe default).",
+            "scoring_mode=real: production compute_ultra_score() from ultra_score.py.",
+            "scoring_mode=compare: runs both, stores delta in candidate.compare field.",
+            "GET /api/debug/score-compare?symbol=AAPL&tf=1d for single-symbol test.",
             "Scheduler remains disabled.",
         ],
     }
