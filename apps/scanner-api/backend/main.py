@@ -1,15 +1,17 @@
 """
 scanner-api — Phase 3: read-only Ultra Scan DB integration.
 
-All endpoints are read-only. No scans, no writes, no scheduler.
+All endpoints are read-only except /api/admin/seed (one-time staging seeder,
+protected by SEED_TOKEN env var, to be removed in Phase 4).
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import secrets
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 log = logging.getLogger(__name__)
@@ -387,3 +389,192 @@ def get_latest_ultra_candidates(
             status_code=500,
             content={**_no_data, "error_type": type(exc).__name__},
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# One-time staging seeder  (Phase 3.5 — remove in Phase 4)
+# Protected by SEED_TOKEN env var. Never runs scans. Synthetic data only.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_DDL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS ultra_scan_runs (
+    id               SERIAL PRIMARY KEY,
+    universe         VARCHAR(20) NOT NULL DEFAULT 'sp500',
+    tf               VARCHAR(10) NOT NULL DEFAULT '1d',
+    nasdaq_batch     VARCHAR(20) NOT NULL DEFAULT '',
+    status           VARCHAR(20) NOT NULL DEFAULT 'running',
+    is_latest        BOOLEAN NOT NULL DEFAULT FALSE,
+    total_candidates INTEGER DEFAULT 0,
+    last_turbo_scan  TEXT,
+    sources_json     TEXT,
+    warnings_json    TEXT,
+    meta_json        TEXT,
+    started_at       TIMESTAMPTZ DEFAULT NOW(),
+    finished_at      TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_usr_univ_tf    ON ultra_scan_runs(universe, tf, nasdaq_batch);
+CREATE INDEX IF NOT EXISTS idx_usr_is_latest  ON ultra_scan_runs(is_latest);
+CREATE INDEX IF NOT EXISTS idx_usr_status     ON ultra_scan_runs(status);
+CREATE INDEX IF NOT EXISTS idx_usr_created_at ON ultra_scan_runs(created_at);
+CREATE TABLE IF NOT EXISTS ultra_scan_candidates (
+    id          BIGSERIAL PRIMARY KEY,
+    scan_run_id INTEGER NOT NULL REFERENCES ultra_scan_runs(id) ON DELETE CASCADE,
+    ticker      TEXT NOT NULL,
+    ultra_score REAL DEFAULT 0,
+    row_json    TEXT NOT NULL,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_usc_run_id ON ultra_scan_candidates(scan_run_id);
+CREATE INDEX IF NOT EXISTS idx_usc_ticker ON ultra_scan_candidates(ticker);
+CREATE INDEX IF NOT EXISTS idx_usc_score  ON ultra_scan_candidates(scan_run_id, ultra_score DESC)
+"""
+
+_SEED_MARKER  = "SEED_SAMPLE_3.5"
+_SEED_TICKERS = [
+    "NVDA","AAPL","MSFT","GOOGL","META","AMZN","TSLA","AVGO","AMD","QCOM",
+    "CRM","ORCL","ADBE","SNOW","PLTR","DDOG","ZS","CRWD","NET","PANW",
+    "LLY","UNH","ABBV","MRK","BMY","AMGN","GILD","REGN","VRTX","ISRG",
+    "JPM","GS","MS","BAC","WFC","BLK","SCHW","AXP","COF","SPGI",
+    "HD","LOW","TGT","COST","NKE","SBUX","MCD","CMG","BKNG","MAR",
+    "GE","CAT","HON","RTX","LMT","DE","EMR","ETN","PH","ITW",
+    "XOM","CVX","COP","SLB","MPC","VLO","OXY","EOG","FANG","HAL",
+    "UBER","ABNB","DASH","RBLX","SPOT","TTD","SNAP","PINS","APP","COUR",
+    "FCX","NEM","AA","NUE","CF","MOS","LIN","APD","ECL","SHW",
+    "T","VZ","TMUS","NFLX","DIS","WBD","PARA","FOXA","OMC","IPG",
+]
+_SECTORS = ["Technology","Healthcare","Financials","Consumer Discretionary",
+            "Industrials","Communication Services","Energy","Materials"]
+_T_SIGS  = ["T4","T1G","T2G","T1","T2","T3","T6"]
+_REGIMES = ["ACTIONABLE_SETUP","CLEAN_ENTRY","SHAKEOUT_ABSORB","REBOUND_SQUEEZE","NONE"]
+_ABR     = ["ACTIVATION","BREAKING","RETEST","NONE"]
+_RTB     = ["TREND","BREAKOUT","RANGE","WATCH"]
+
+
+def _synthetic_row(i: int, ticker: str) -> dict:
+    import random
+    rng = random.Random(hash(ticker) ^ i ^ 0xFACE)
+    score = max(35, min(99, 58 + rng.randint(-23, 41)))
+    turbo = max(20, min(95, score - rng.randint(0, 12)))
+    bi    = 0 if score >= 90 else 1 if score >= 80 else 2 if score >= 65 else 3 if score >= 50 else 4
+    bv2   = ["A+","A","B","C","D"][bi]
+    pri   = ["HIGH_PRIORITY","WATCH_A","STRONG_WATCH","CONTEXT_WATCH","LOW"][bi]
+    rgm   = rng.choice(_REGIMES)
+    reasons = []
+    if score >= 80: reasons.append("BUY_2809")
+    if score >= 75: reasons.append("MOMO+CAT")
+    if rgm != "NONE": reasons.append(f"REGIME:{rgm}")
+    abr_val = rng.choice(_ABR)
+    if abr_val != "NONE": reasons.append(f"ABR:{abr_val}")
+    price = round(rng.uniform(8, 820), 2)
+    return {
+        "ticker": ticker, "name": f"{ticker} Inc", "sector": _SECTORS[i % len(_SECTORS)],
+        "industry": f"{_SECTORS[i%len(_SECTORS)]} Group", "profile": rng.choice(["nasdaq","sp500"]),
+        "price": price, "close": price, "change_pct": round(rng.uniform(-3.5, 9.0), 2),
+        "volume": rng.randint(400_000, 30_000_000), "avg_vol": rng.randint(500_000, 20_000_000),
+        "t_signal": rng.choice(_T_SIGS), "z_signal": rng.choice(["Z1","Z4","",""]),
+        "l_signal": rng.choice(["L1","L3","L34","FRI34","BLUE",""]),
+        "turbo_score": turbo, "ultra_score": score,
+        "ultra_score_band": ["A","A","B","C","D"][bi], "ultra_score_band_v2": bv2,
+        "ultra_score_priority": pri, "ultra_score_reasons": reasons,
+        "ultra_score_flags": ["MOMENTUM_A"] if rng.random() < 0.3 else [],
+        "ultra_score_raw_before_penalty": score + rng.randint(0, 8),
+        "ultra_score_penalty_total": rng.randint(0, 5),
+        "ultra_score_regime_bonus": 12 if rgm=="ACTIONABLE_SETUP" else 8 if rgm=="CLEAN_ENTRY" else 0,
+        "ultra_score_caps_applied": [], "ultra_score_cap_reason": "",
+        "buy_2809": score >= 75, "rocket": score >= 88,
+        "sig3g": rng.random() < 0.4, "rtv": rng.random() < 0.3,
+        "rtb_phase": rng.choice(_RTB), "sweet_spot": score >= 70 and rng.random() < 0.6,
+        "abr_category": abr_val, "tz_intel_role": rng.choice(["ACTIVATION","BREAKING","",""]),
+        "wlnbb_bucket": rng.choice(["L1","L3","L34","",""]),
+        "ema_state": rng.choice(["ABOVE","CROSS_UP","","BELOW"]),
+        "action_bucket": rng.choice(["BUY","WATCH","REVIEW",""]),
+        "sequence": rng.choice(["T4→T2","T1G→T2G","",""]),
+        "sequence_4bar": rng.choice(["T4→T2→T2→T1","",""]),
+        "ultra_enriched": True,
+        "ultra_sources": {"has_turbo": True, "has_tz_wlnbb": rng.random()<0.7,
+                          "has_tz_intel": rng.random()<0.5},
+    }
+
+
+@app.post("/api/admin/seed")
+def admin_seed(x_seed_token: str = Header(default="")):
+    """
+    One-time staging DB seeder. Protected by SEED_TOKEN env var.
+    Creates schema + inserts 100 synthetic candidates. Idempotent.
+    REMOVE in Phase 4.
+    """
+    expected = os.environ.get("SEED_TOKEN", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="SEED_TOKEN not configured on this service")
+    if not secrets.compare_digest(x_seed_token, expected):
+        raise HTTPException(status_code=401, detail="Invalid seed token")
+
+    from . import db as _db
+    import psycopg2
+    import psycopg2.extras
+
+    if not _db.DATABASE_URL:
+        raise HTTPException(status_code=503, detail="DATABASE_URL not configured")
+
+    results: dict = {"schema_created": False, "run_id": None, "candidates_inserted": 0,
+                     "skipped": False, "error": None}
+    try:
+        conn = psycopg2.connect(_db.DATABASE_URL, connect_timeout=10)
+        conn.autocommit = False
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Create schema
+        for stmt in [s.strip() for s in _DDL_SCHEMA.split(";") if s.strip()]:
+            cur.execute(stmt)
+        conn.commit()
+        results["schema_created"] = True
+
+        # Idempotency check
+        cur.execute("SELECT id FROM ultra_scan_runs WHERE nasdaq_batch=%s LIMIT 1", (_SEED_MARKER,))
+        existing = cur.fetchone()
+        if existing:
+            results["skipped"] = True
+            results["run_id"] = existing["id"]
+            cur.close(); conn.close()
+            return results
+
+        # Flip existing is_latest
+        cur.execute("UPDATE ultra_scan_runs SET is_latest=FALSE WHERE universe='sp500' AND tf='1d'")
+
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+
+        cur.execute(
+            """INSERT INTO ultra_scan_runs
+               (universe, tf, nasdaq_batch, status, is_latest, total_candidates,
+                sources_json, warnings_json, started_at, finished_at)
+               VALUES ('sp500','1d',%s,'completed',TRUE,100,%s,%s,%s,%s)
+               RETURNING id""",
+            (_SEED_MARKER, json.dumps({"source":"seed_endpoint"}), json.dumps([]), now, now),
+        )
+        run_id = cur.fetchone()["id"]
+
+        rows = [
+            (run_id, t, float(c["ultra_score"]), json.dumps(c))
+            for i, t in enumerate(_SEED_TICKERS)
+            for c in [_synthetic_row(i, t)]
+        ]
+        psycopg2.extras.execute_batch(
+            cur,
+            "INSERT INTO ultra_scan_candidates (scan_run_id, ticker, ultra_score, row_json) "
+            "VALUES (%s,%s,%s,%s)",
+            rows, page_size=100,
+        )
+        conn.commit()
+        cur.close(); conn.close()
+
+        results["run_id"] = run_id
+        results["candidates_inserted"] = len(rows)
+        log.info("Seed complete: run_id=%s candidates=%s", run_id, len(rows))
+        return results
+
+    except Exception as exc:
+        log.exception("admin_seed error")
+        results["error"] = type(exc).__name__
+        return JSONResponse(status_code=500, content=results)
