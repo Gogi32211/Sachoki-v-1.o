@@ -480,6 +480,26 @@ function _setScanBtns(running) {
   if (cancelBtn) { cancelBtn.disabled = !running; }
 }
 
+// Phase 8G commit 9: signal-family filter chips for Ultra latest table.
+// Reads bar.signals.{family} from the normalized scanner output.
+const _FILTER_FAMILIES = [
+  { key: "t",     label: "T"     }, { key: "z",     label: "Z"     },
+  { key: "l",     label: "L"     }, { key: "f",     label: "F"     },
+  { key: "fly",   label: "FLY"   }, { key: "g",     label: "G"     },
+  { key: "b",     label: "B"     }, { key: "i",     label: "I"     },
+  { key: "ult",   label: "ULT"   }, { key: "vabs",  label: "VABS"  },
+  { key: "wick",  label: "WICK"  }, { key: "setup", label: "SETUP" },
+  { key: "gog",   label: "GOG"   }, { key: "ctx",   label: "CTX"   },
+];
+const _ultraSelectedFamilies = new Set();
+
+function _refreshFamilyChips() {
+  document.querySelectorAll(".family-chip[data-family]").forEach(btn => {
+    const active = _ultraSelectedFamilies.has(btn.dataset.family);
+    btn.classList.toggle("family-chip-active", active);
+  });
+}
+
 async function renderUltra() {
   const data = await ensureBootstrap();
   const scan = data.latest_scan ?? {};
@@ -558,8 +578,29 @@ async function renderUltra() {
         <label>Min Score
           <input id="fMinScore" type="number" min="0" max="100" placeholder="0" style="width:70px" />
         </label>
+        <label>Split
+          <select id="fSplit">
+            <option value="">Any</option>
+            <option value="exclude">Exclude split-contaminated</option>
+            <option value="only">Split universe only</option>
+            <option value="reverse">Has reverse split</option>
+          </select>
+        </label>
+        <label>RTB Phase
+          <select id="fRtb">
+            <option value="">Any</option>
+            <option>A</option><option>B</option><option>C</option><option>D</option>
+          </select>
+        </label>
         <button class="btn-clear" id="clearFilters">Clear</button>
         <span class="filter-count" id="filterCount"></span>
+      </div>
+      <div class="filter-families" id="filterFamilies">
+        <span class="filter-families-label">Signal family:</span>
+        ${_FILTER_FAMILIES.map(f =>
+          `<button type="button" class="chip family-chip" data-family="${f.key}">${esc(f.label)}</button>`
+        ).join("")}
+        <button type="button" class="chip family-chip family-clear" id="famClearBtn">clear</button>
       </div>
       <div class="table-wrap">
         <table>
@@ -574,15 +615,37 @@ async function renderUltra() {
     </div>`;
 
   applyUltraFilters();
-  ["fSearch","fBand","fSector","fMinScore"].forEach(id => {
+  ["fSearch","fBand","fSector","fMinScore","fSplit","fRtb"].forEach(id => {
     const el = $(id);
-    if (el) el.addEventListener("input", applyUltraFilters);
+    if (el) el.addEventListener("input",  applyUltraFilters);
+    if (el) el.addEventListener("change", applyUltraFilters);
   });
   const clr = $("clearFilters");
   if (clr) clr.addEventListener("click", () => {
-    ["fSearch","fBand","fSector","fMinScore"].forEach(id => { const el=$(id); if(el) el.value=""; });
+    ["fSearch","fBand","fSector","fMinScore","fSplit","fRtb"].forEach(id => {
+      const el=$(id); if(el) el.value="";
+    });
+    _ultraSelectedFamilies.clear();
+    _refreshFamilyChips();
     applyUltraFilters();
   });
+  // Signal-family chips — click toggles selection
+  document.querySelectorAll(".family-chip[data-family]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const fam = btn.dataset.family;
+      if (_ultraSelectedFamilies.has(fam)) _ultraSelectedFamilies.delete(fam);
+      else                                 _ultraSelectedFamilies.add(fam);
+      _refreshFamilyChips();
+      applyUltraFilters();
+    });
+  });
+  const famClr = $("famClearBtn");
+  if (famClr) famClr.addEventListener("click", () => {
+    _ultraSelectedFamilies.clear();
+    _refreshFamilyChips();
+    applyUltraFilters();
+  });
+  _refreshFamilyChips();
 
   // Restore running state if scan was in progress before navigation
   if (_scanRunning) {
@@ -600,12 +663,34 @@ function applyUltraFilters() {
   const band     = $("fBand")?.value ?? "";
   const sector   = $("fSector")?.value ?? "";
   const minScore = parseFloat($("fMinScore")?.value) || 0;
+  const splitOpt = $("fSplit")?.value ?? "";
+  const rtbOpt   = $("fRtb")?.value ?? "";
 
   const filtered = _ultraCandidates.filter(c => {
     if (search && !c.symbol?.toUpperCase().includes(search)) return false;
     if (band   && c.band !== band)     return false;
     if (sector && c.sector !== sector) return false;
     if ((c.ultra_score ?? 0) < minScore) return false;
+
+    // Split filter
+    const split = c.split || {};
+    if (splitOpt === "exclude" && split.split_contaminated) return false;
+    if (splitOpt === "only"    && !split.has_split)         return false;
+    if (splitOpt === "reverse" && !split.has_reverse_split) return false;
+
+    // RTB filter
+    if (rtbOpt) {
+      const phase = (c.scores || {}).rtb_phase ?? "";
+      if (phase !== rtbOpt) return false;
+    }
+
+    // Signal-family chip filter — AND across selected families.
+    if (_ultraSelectedFamilies.size > 0) {
+      const sigs = c.signals || {};
+      for (const fam of _ultraSelectedFamilies) {
+        if (!(sigs[fam] && sigs[fam].length > 0)) return false;
+      }
+    }
     return true;
   });
 
@@ -865,28 +950,34 @@ async function loadChartHistory() {
   }
 }
 
-// Signal rows for the timeline table
+// Signal rows for the timeline table — full old-Ultra parity row order.
+// Score rows read from bar.scores.*; numeric rows read from top-level fields.
 const _TL_ROWS = [
   { key: "z",     label: "Z",     type: "sig", cls: "badge-z"       },
   { key: "t",     label: "T",     type: "sig", cls: "badge-t"       },
   { key: "l",     label: "L",     type: "sig", cls: "badge-l"       },
   { key: "f",     label: "F",     type: "sig", cls: "badge-f"       },
   { key: "fly",   label: "FLY",   type: "sig", cls: "badge-fly"     },
-  { key: "g",     label: "G",     type: "sig", cls: "badge-neutral" },
-  { key: "b",     label: "B",     type: "sig", cls: "badge-neutral" },
-  { key: "i",     label: "I",     type: "sig", cls: "badge-neutral" },
-  { key: "ult",   label: "ULT",   type: "sig", cls: "badge-neutral" },
+  { key: "g",     label: "G",     type: "sig", cls: "badge-g"       },
+  { key: "b",     label: "B",     type: "sig", cls: "badge-b"       },
+  { key: "i",     label: "I",     type: "sig", cls: "badge-i"       },
+  { key: "ult",   label: "ULT",   type: "sig", cls: "badge-ult"     },
   { key: "vol",   label: "VOL",   type: "sig", cls: "badge-vol"     },
-  { key: "vabs",  label: "VABS",  type: "sig", cls: "badge-neutral" },
-  { key: "wick",  label: "WICK",  type: "sig", cls: "badge-neutral" },
-  { key: "setup", label: "SETUP", type: "sig", cls: "badge-neutral" },
-  { key: "gog",   label: "GOG",   type: "sig", cls: "badge-neutral" },
+  { key: "vabs",  label: "VABS",  type: "sig", cls: "badge-vabs"    },
+  { key: "wick",  label: "WICK",  type: "sig", cls: "badge-wick"    },
+  { key: "setup", label: "SETUP", type: "sig", cls: "badge-setup"   },
+  { key: "gog",   label: "GOG",   type: "sig", cls: "badge-gog"     },
   { key: "ctx",   label: "CTX",   type: "sig", cls: "badge-ctx"     },
   // numeric separator + rows
-  { key: "_sep",  label: "",      type: "sep"  },
-  { key: "close", label: "close", type: "num", dec: 2  },
-  { key: "rsi",   label: "RSI",   type: "num", dec: 1  },
-  { key: "cci",   label: "CCI",   type: "num", dec: 1  },
+  { key: "_sep",  label: "",      type: "sep" },
+  { key: "score",       label: "SCORE", type: "score", from: "ultra_score",     dec: 0 },
+  { key: "turbo_score", label: "turbo", type: "score", from: "turbo_score",     dec: 0 },
+  { key: "rtb_phase",   label: "rtb",   type: "score", from: "rtb_phase",       dec: -1 },
+  { key: "close",       label: "close", type: "num",   dec: 2 },
+  { key: "rsi",         label: "RSI",   type: "num",   dec: 1 },
+  { key: "cci",         label: "CCI",   type: "num",   dec: 1 },
+  { key: "pf",          label: "Pf",    type: "score", from: "pf",              dec: 0 },
+  { key: "category",    label: "Cat",   type: "score", from: "category",        dec: -1 },
 ];
 
 function _numCls(key, val) {
@@ -899,8 +990,16 @@ let _tlHideEmpty    = true;   // hide signal rows that have no badges across all
 let _lastHistoryData = null;  // cached response for toggle re-render
 
 function _tlRowHasData(row, bars) {
-  if (row.type !== "sig") return true;  // always show sep/num rows
-  return bars.some(bar => (bar.signals?.[row.key] ?? []).length > 0);
+  if (row.type === "sig") {
+    return bars.some(bar => (bar.signals?.[row.key] ?? []).length > 0);
+  }
+  if (row.type === "score") {
+    return bars.some(bar => {
+      const v = bar.scores?.[row.from];
+      return v !== null && v !== undefined && v !== "" && v !== 0;
+    });
+  }
+  return true;  // sep / num
 }
 
 function _buildHistoryTimeline(data) {
@@ -938,6 +1037,21 @@ function _buildHistoryTimeline(data) {
         const val = bar[row.key];
         if (val == null) return `<td class="tl-num tl-num-dim">—</td>`;
         return `<td class="${_numCls(row.key, val)}">${Number(val).toFixed(row.dec ?? 2)}</td>`;
+      }).join("");
+      return `<tr><th class="tl-row-label">${esc(row.label)}</th>${cells}</tr>`;
+    }
+
+    if (row.type === "score") {
+      const cells = bars.map(bar => {
+        const val = bar.scores?.[row.from];
+        if (val == null || val === "") return `<td class="tl-num tl-num-dim">—</td>`;
+        if (row.dec === -1) {
+          // String label (rtb_phase, category)
+          return `<td class="tl-num">${esc(String(val))}</td>`;
+        }
+        const num = Number(val);
+        if (!isFinite(num)) return `<td class="tl-num">${esc(String(val))}</td>`;
+        return `<td class="${_numCls(row.from, num)}">${num.toFixed(row.dec ?? 0)}</td>`;
       }).join("");
       return `<tr><th class="tl-row-label">${esc(row.label)}</th>${cells}</tr>`;
     }

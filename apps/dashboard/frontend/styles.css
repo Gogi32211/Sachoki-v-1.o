@@ -485,7 +485,37 @@ tbody tr:last-child { border-bottom: none; }
 .badge-fly     { background: #1a130d; color: #ffa657; border-color: #9e6a03; }
 .badge-vol     { background: #1a1200; color: #e3b341; border-color: #7d5f00; }
 .badge-ctx     { background: #0d1a20; color: #79c0ff; border-color: #388bfd; }
+.badge-g       { background: #1a0d24; color: #c084fc; border-color: #6b21a8; }
+.badge-b       { background: #241600; color: #fbbf24; border-color: #92400e; }
+.badge-i       { background: #0d2418; color: #34d399; border-color: #047857; }
+.badge-ult     { background: #2a1d05; color: #fde047; border-color: #a16207; }
+.badge-vabs    { background: #2c0d1a; color: #f472b6; border-color: #be185d; }
+.badge-wick    { background: #102438; color: #93c5fd; border-color: #1d4ed8; }
+.badge-setup   { background: #1f1207; color: #fb923c; border-color: #c2410c; }
+.badge-gog     { background: #221234; color: #d8b4fe; border-color: #7e22ce; }
 .badge-neutral { background: #1c2128; color: var(--text-dim); border-color: var(--border2); }
+
+/* Ultra filter signal-family chips */
+.filter-families {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  align-items: center; padding: 8px 12px 4px;
+  border-top: 1px solid var(--border2);
+  margin-top: -2px;
+}
+.filter-families-label { font-size: .7rem; color: var(--text-dim); margin-right: 6px; }
+.family-chip {
+  font-size: .65rem; font-weight: 600;
+  padding: 3px 7px; border-radius: 3px;
+  background: var(--surface2); color: var(--text2);
+  border: 1px solid var(--border); cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.family-chip:hover { background: var(--border); }
+.family-chip-active {
+  background: #1f6feb; color: white; border-color: #1f6feb;
+}
+.family-clear { background: transparent; color: var(--text-dim); }
+.family-clear:hover { color: var(--text); }
 
 /* ── Ultra Scan Controls ──────────────────────────────────────────────────── */
 .scan-controls-card {
