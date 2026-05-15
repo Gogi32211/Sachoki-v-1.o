@@ -143,7 +143,7 @@ def _signal_set(row: dict) -> set:
     """
     if not isinstance(row, dict):
         return set()
-    from ultra_signal_parser import parse_stock_stat_signals
+    from .ultra_signal_parser import parse_stock_stat_signals
     p = parse_stock_stat_signals(row)
     s: set = set()
 
