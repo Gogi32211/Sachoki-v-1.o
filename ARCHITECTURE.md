@@ -8,19 +8,20 @@
 
 1. [Overview](#overview)
 2. [Directory Structure](#directory-structure)
-3. [Backend Architecture](#backend-architecture)
-4. [Signal Types Reference](#signal-types-reference)
-5. [Scoring & Turbo Engine](#scoring--turbo-engine)
-6. [ULTRA Score v2](#ultra-score-v2)
-7. [Sequences Engine](#sequences-engine)
-8. [BETA Score Engine](#beta-score-engine)
-9. [Paper Portfolio](#paper-portfolio)
-10. [Chart Observations](#chart-observations)
-11. [API Endpoints](#api-endpoints)
-12. [Frontend Tabs](#frontend-tabs)
-13. [Analyzer Modules](#analyzer-modules)
-14. [Deployment](#deployment)
-15. [Test Suite](#test-suite)
+3. [Monorepo Service Structure](#monorepo-service-structure)
+4. [Backend Architecture](#backend-architecture)
+5. [Signal Types Reference](#signal-types-reference)
+6. [Scoring & Turbo Engine](#scoring--turbo-engine)
+7. [ULTRA Score v2](#ultra-score-v2)
+8. [Sequences Engine](#sequences-engine)
+9. [BETA Score Engine](#beta-score-engine)
+10. [Paper Portfolio](#paper-portfolio)
+11. [Chart Observations](#chart-observations)
+12. [API Endpoints](#api-endpoints)
+13. [Frontend Tabs](#frontend-tabs)
+14. [Analyzer Modules](#analyzer-modules)
+15. [Deployment](#deployment)
+16. [Test Suite](#test-suite)
 
 ---
 
@@ -771,28 +772,125 @@ ABR classifier using `ABR_rule_database.csv`. Classifies bars as Activation / Br
 
 ---
 
+## Monorepo Service Structure
+
+The repository is a two-service monorepo. The `backend/` and `frontend/` directories are independent deployable units that share a single git tree.
+
+### Service Map
+
+```
+sachoki/                        ← repo root
+├── Dockerfile                  ← UNIFIED build (frontend embedded in FastAPI)
+├── railway.toml                ← root Railway service config
+│
+├── backend/                    ← Python / FastAPI service
+│   ├── Dockerfile              ← standalone backend build (also embeds frontend)
+│   ├── railway.toml            ← backend Railway service config
+│   ├── requirements.txt
+│   └── main.py                 ← FastAPI entry point (uvicorn main:app)
+│
+└── frontend/                   ← React / Vite SPA
+    ├── Dockerfile              ← standalone frontend build
+    ├── railway.toml            ← frontend Railway service config
+    ├── nginx.conf              ← nginx SPA server (port 8080)
+    ├── package.json
+    └── vite.config.js          ← dev proxy: /api → localhost:8080
+```
+
+### Deployment Modes
+
+There are two deployment topologies. Choose one per environment.
+
+#### Mode 1 — Unified (single service)
+
+The root `Dockerfile` uses a two-stage build: Node 20 compiles the React SPA, then the Python 3.11 image copies the dist bundle into `./static/`. FastAPI serves the SPA via `StaticFiles` alongside the API, all on one port.
+
+```
+Browser
+  └─ GET /          → FastAPI StaticFiles → React SPA (dist/)
+  └─ GET /api/*     → FastAPI route handlers
+```
+
+Use the root `railway.toml` for a single Railway service. `VITE_API_URL` should be empty so Vite builds with relative `/api` paths.
+
+#### Mode 2 — Split services (backend + frontend)
+
+`backend/` and `frontend/` each have their own `Dockerfile` and `railway.toml`, deployable as separate Railway services.
+
+```
+Browser
+  └─ GET /          → frontend service (nginx) → React SPA
+  └─ GET /api/*     → browser JS → backend service (FastAPI :8080)
+```
+
+**Backend service** (`backend/railway.toml`):
+- Builder: `DOCKERFILE` → `backend/Dockerfile`
+- Healthcheck: `GET /api/health` (120 s timeout)
+- Restart policy: `ON_FAILURE`
+- Exposes port 8080
+
+**Frontend service** (`frontend/railway.toml`):
+- Builder: `DOCKERFILE` → `frontend/Dockerfile`
+- Healthcheck: `GET /` (30 s timeout)
+- nginx serves `dist/` as SPA, port 8080
+- Set `VITE_API_URL=https://<backend-service-domain>` at build time so the SPA's `/api` calls reach the backend
+
+### Local Development
+
+```bash
+# terminal 1 — backend
+cd backend
+uvicorn main:app --host 0.0.0.0 --port 8080 --reload
+
+# terminal 2 — frontend
+cd frontend
+npm install
+npm run dev          # Vite on :5173; /api proxied to :8080 via vite.config.js
+```
+
+Vite's dev proxy (`vite.config.js`) rewrites `/api/*` to `http://localhost:8080` — no CORS configuration needed during development.
+
+### Service Communication
+
+| Caller | Target | Transport |
+|--------|--------|-----------|
+| React SPA (browser) | FastAPI `/api/*` | HTTP (relative path in unified; absolute URL in split) |
+| FastAPI | PostgreSQL | TCP (`DATABASE_URL` env var) |
+| FastAPI | Polygon.io | HTTPS (`POLYGON_API_KEY`) |
+| FastAPI | yfinance | HTTPS (no key) |
+| APScheduler | internal engines | in-process function calls |
+
+---
+
 ## Deployment
 
 ### Railway
 
+The root `railway.toml` is the default single-service config:
+
 ```toml
-# railway.toml
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "uvicorn backend.main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/api/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
 ```
+
+For split-service deploys, point each Railway service at `backend/railway.toml` or `frontend/railway.toml` respectively and configure the build root to the service subdirectory.
 
 ### Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `PORT` | HTTP port (default: 8080) |
-| `DATABASE_URL` | PostgreSQL connection string |
-| `POLYGON_API_KEY` | Polygon.io market data key |
-| `MASSIVE_API_KEY` | Massive API key (all_us universe) |
+| Variable | Service | Description |
+|----------|---------|-------------|
+| `PORT` | backend | HTTP port (default: 8080) |
+| `DATABASE_URL` | backend | PostgreSQL connection string |
+| `POLYGON_API_KEY` | backend | Polygon.io market data key |
+| `MASSIVE_API_KEY` | backend | Massive API key (all_us universe) |
+| `VITE_API_URL` | frontend | Backend base URL for split-service deploys (empty in unified) |
 
 ---
 
