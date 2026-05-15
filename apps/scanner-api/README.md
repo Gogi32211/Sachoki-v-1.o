@@ -36,9 +36,25 @@ Full existing routes remain in `backend/main.py` until extraction.
 ## Local development
 
 ```bash
-cd backend
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8080
+# Run from the service root (apps/scanner-api), not the repo root.
+# Python module paths use "backend.main" relative to this directory.
+
+cd apps/scanner-api
+pip install -r backend/requirements.txt
+uvicorn backend.main:app --reload --port 8101
+```
+
+Endpoints available after start:
+
+| Method | Path | Response |
+|--------|------|---------|
+| GET | `/health` | `{ status, service }` |
+| GET | `/version` | `{ service, version, phase }` |
+| GET | `/api/debug/status` | env-var presence booleans |
+
+Railway start command (set in `railway.toml` later):
+```
+uvicorn backend.main:app --host 0.0.0.0 --port $PORT
 ```
 
 ## Railway config

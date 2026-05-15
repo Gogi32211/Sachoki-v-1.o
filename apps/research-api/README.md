@@ -41,9 +41,24 @@ GET  /api/tz-intelligence/scan
 ## Local development
 
 ```bash
-cd backend
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8081
+# Run from the service root (apps/research-api), not the repo root.
+
+cd apps/research-api
+pip install -r backend/requirements.txt
+uvicorn backend.main:app --reload --port 8102
+```
+
+Endpoints available after start:
+
+| Method | Path | Response |
+|--------|------|---------|
+| GET | `/health` | `{ status, service }` |
+| GET | `/version` | `{ service, version, phase }` |
+| GET | `/api/debug/status` | env-var presence booleans |
+
+Railway start command (set in `railway.toml` later):
+```
+uvicorn backend.main:app --host 0.0.0.0 --port $PORT
 ```
 
 ## Railway config
