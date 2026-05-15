@@ -1,10 +1,10 @@
 """
-scanner-api — Phase 7A: real Ultra scorer + compare mode.
+scanner-api — Phase 7B: real Ultra scoring is now the default.
 
-Adds scoring_mode (temporary/real/compare) to ScanRequest.
-Real mode uses the production compute_ultra_score() engine via scoring_adapter.
-Compare mode runs both engines and stores delta in candidate.compare field.
-Debug endpoint GET /api/debug/score-compare returns a side-by-side for one symbol.
+scoring_mode defaults to "real" (production compute_ultra_score engine).
+"temporary" and "compare" remain available for debug.
+Candidate row_json always carries score_engine, ultra_score, band,
+final_signal, why_selected, risk_flags.
 Scheduler and full-market scan remain disabled.
 """
 from __future__ import annotations
@@ -24,10 +24,10 @@ from pydantic import BaseModel, field_validator
 log = logging.getLogger(__name__)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "info").upper())
 
-app = FastAPI(title="scanner-api", version="0.8.0")
+app = FastAPI(title="scanner-api", version="0.9.0")
 
-_VERSION = "0.8.0"
-_PHASE   = "7A-real-scorer"
+_VERSION = "0.9.0"
+_PHASE   = "7B-real-default"
 
 # Known Ultra Scan table names (confirmed from backend/ultra_scan_migration.py)
 _RUN_TABLE  = "ultra_scan_runs"
@@ -87,7 +87,7 @@ class ScanRequest(BaseModel):
     timeframe:      str       = "1d"
     universe:       str       = "manual_test"
     scan_mode:      str       = "controlled_test"
-    scoring_mode:   str       = "temporary"   # temporary | real | compare
+    scoring_mode:   str       = "real"         # real (default) | temporary | compare
     replace_latest: bool      = True
     dry_run:        bool      = False
 
@@ -1123,13 +1123,13 @@ def debug_scan_config():
         "async_scan":               True,
         "redis_progress":           _prog.redis_available(),
         "scoring_modes":            sorted(_ALLOWED_SCORING_MODES),
-        "default_scoring_mode":     "temporary",
+        "default_scoring_mode":     "real",
+        "score_engine_real":        "real_ultra_score",
         "score_engine_temporary":   "temporary_phase_5A",
-        "score_engine_real":        "ultra_phase_7A",
         "notes": [
-            "Phase 7A: real Ultra scorer available via scoring_mode=real|compare.",
-            "scoring_mode=temporary: rule-based EMA/RSI/volume scorer (safe default).",
-            "scoring_mode=real: production compute_ultra_score() from ultra_score.py.",
+            "Phase 7B: real Ultra scoring is now the default (scoring_mode=real).",
+            "scoring_mode=real: production compute_ultra_score() — default.",
+            "scoring_mode=temporary: legacy rule-based EMA/RSI/volume scorer.",
             "scoring_mode=compare: runs both, stores delta in candidate.compare field.",
             "GET /api/debug/score-compare?symbol=AAPL&tf=1d for single-symbol test.",
             "Scheduler remains disabled.",

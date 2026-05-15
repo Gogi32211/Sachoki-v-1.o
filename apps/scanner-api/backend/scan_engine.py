@@ -30,8 +30,8 @@ DEFAULT_SYMBOLS: list[str] = [
 MAX_SYMBOLS        = 20
 ALLOWED_TIMEFRAMES = ["1d"]
 SCORE_ENGINE_TEMP  = "temporary_phase_5A"
-SCORE_ENGINE_REAL  = "ultra_phase_7A"
-SCORE_ENGINE       = SCORE_ENGINE_TEMP  # default — overridden per run by scoring_mode
+SCORE_ENGINE_REAL  = "real_ultra_score"
+SCORE_ENGINE       = SCORE_ENGINE_TEMP  # kept for legacy reference; actual label set per run
 
 _MASSIVE_BASE = os.environ.get("MASSIVE_BASE", "https://api.massive.com")
 _SPAN = {

@@ -20,7 +20,7 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-SCORE_ENGINE = "ultra_phase_7A"
+SCORE_ENGINE = "real_ultra_score"
 
 
 def _map_signals_to_row(symbol: str, signals: dict, df: pd.DataFrame | None) -> dict:
