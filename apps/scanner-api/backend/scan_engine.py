@@ -249,29 +249,45 @@ def score_candidate(symbol: str, signals: dict) -> dict:
         band, priority = "D",  "LOW"
 
     return {
+        # Identity
         "symbol":               symbol,
         "ticker":               symbol,
-        "ultra_score":          score,
-        "band":                 band,
-        "ultra_score_band_v2":  band,
-        "priority":             priority,
-        "ultra_score_priority": priority,
+        "company":              "",
+        "sector":               "",
+        "industry":             "",
+        # Price / market data
         "price":                signals.get("price"),
+        "change_pct":           None,
+        "volume":               None,
+        # Scores
+        "ultra_score":          score,
+        "ultra_score_band_v2":  band,
+        "ultra_score_band":     band,
+        "band":                 band,
+        "ultra_score_priority": priority,
+        "priority":             priority,
+        # Signals
+        "ema20":                signals.get("ema20"),
+        "ema50":                signals.get("ema50"),
         "rsi":                  signals.get("rsi"),
         "vol_ratio":            signals.get("vol_ratio"),
         "mom5d_pct":            signals.get("mom5d_pct"),
-        "ema20":                signals.get("ema20"),
-        "ema50":                signals.get("ema50"),
+        # Reasons / flags
         "ultra_score_reasons":  why[:5],
+        "why_selected":         why[:5],
         "ultra_score_flags":    flags[:3],
-        "score_engine":         SCORE_ENGINE,
-        "source":               "scanner-api-controlled-scan",
-        "sector":               "",
-        "company":              "",
+        "risk_flags":           flags[:3],
+        # Signal slots (empty — phase 5A engine)
         "final_signal":         "",
         "action_bucket":        "",
-        "why_selected":         why[:5],
-        "risk_flags":           flags[:3],
+        "sequence_4bar":        "",
+        "abr_category":         "",
+        "wlnbb_bucket":         "",
+        "ema_state":            "",
+        # Metadata
+        "score_engine":         SCORE_ENGINE,
+        "data_provider":        "massive",
+        "source":               "scanner-api-controlled-scan",
     }
 
 
@@ -298,18 +314,19 @@ def run_controlled_scan(
         try:
             df = fetch_bars(sym, interval=timeframe)
             if df is None:
-                errors.append({"symbol": sym, "error": "no_data"})
+                errors.append({"symbol": sym, "stage": "fetch_bars", "error": "No candles returned"})
                 continue
             signals = compute_signals(df)
             if not signals:
-                errors.append({"symbol": sym, "error": "signal_computation_failed"})
+                errors.append({"symbol": sym, "stage": "compute_signals", "error": "Signal computation failed"})
                 continue
             candidate = score_candidate(sym, signals)
+            candidate["timeframe"] = timeframe
             results.append(candidate)
             log.info("scanned %s → score=%s band=%s", sym, candidate["ultra_score"], candidate["band"])
         except Exception as exc:
             log.warning("scan error for %s: %s", sym, exc)
-            errors.append({"symbol": sym, "error": type(exc).__name__})
+            errors.append({"symbol": sym, "stage": "unknown", "error": type(exc).__name__})
 
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     results.sort(key=lambda x: x.get("ultra_score", 0), reverse=True)
@@ -319,6 +336,7 @@ def run_controlled_scan(
         "errors":            errors,
         "symbols_requested": len(symbols),
         "symbols_scanned":   len(results),
+        "symbols_failed":    len(errors),
         "candidates_saved":  len(results),
         "elapsed_ms":        elapsed_ms,
         "started_at":        started.isoformat(),
