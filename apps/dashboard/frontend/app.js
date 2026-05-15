@@ -314,13 +314,174 @@ function renderBars(entries, rowClass) {
 // PAGE: ULTRA SCANNER
 // ═════════════════════════════════════════════════════════════════════════════
 let _ultraCandidates = [];
+let _pollTimer       = null;
+let _scanRunId       = null;
+let _scanRunning     = false;
+
+// ── Scan controls: sample lists + controls init ───────────────────────────────
+async function loadSampleListsAndInit() {
+  const ctrlEl = $("scanControls");
+  if (!ctrlEl) return;
+  try {
+    const d = await apiFetch("/api/dashboard/scans/ultra/sample-lists");
+    const lists = d.lists ?? {};
+    const counts = {
+      sp500_sample:  (lists.sp500_sample  ?? []).length,
+      nasdaq_sample: (lists.nasdaq_sample ?? []).length,
+      manual_test:   (lists.manual_test   ?? []).length,
+    };
+    const univ = $("scUniverse");
+    if (univ) {
+      univ.querySelector('option[value="sp500_sample"]').textContent  = `S&P 500 Sample (${counts.sp500_sample})`;
+      univ.querySelector('option[value="nasdaq_sample"]').textContent = `NASDAQ Sample (${counts.nasdaq_sample})`;
+      univ.querySelector('option[value="manual_default"]').textContent = `Manual List (${counts.manual_test})`;
+    }
+  } catch { /* leave default labels */ }
+}
+
+async function runScan() {
+  if (_scanRunning) return;
+  const universe    = $("scUniverse")?.value   ?? "sp500_sample";
+  const count       = parseInt($("scCount")?.value  ?? "25", 10);
+  const mode        = $("scMode")?.value        ?? "real";
+  const replace     = $("scReplace")?.checked  ?? true;
+
+  _scanRunning = true;
+  _clearPolling();
+  _setScanBtns(true);
+  _setProgressVisible(true);
+  $("scProgress").innerHTML = _progressHtml({ status: "starting", symbols_scanned: 0, symbols_total: count });
+
+  try {
+    const resp = await fetch("/api/dashboard/scans/ultra/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ universe, symbol_count: count, scoring_mode: mode, timeframe: "1d", replace_latest: replace }),
+    });
+    const result = await resp.json();
+    if (!resp.ok || result.ok === false) {
+      _showScanError(result.error ?? `HTTP ${resp.status}`);
+      _scanRunning = false;
+      _setScanBtns(false);
+      return;
+    }
+    _scanRunId = result.run_id ?? null;
+    _startPolling(_scanRunId);
+  } catch (err) {
+    _showScanError(String(err));
+    _scanRunning = false;
+    _setScanBtns(false);
+  }
+}
+
+async function cancelScan() {
+  _clearPolling();
+  try {
+    await fetch("/api/dashboard/scans/ultra/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run_id: _scanRunId }),
+    });
+  } catch { /* ignore */ }
+  _scanRunning = false;
+  _setScanBtns(false);
+  const prog = $("scProgress");
+  if (prog) prog.innerHTML = _progressHtml({ status: "cancelled" });
+}
+
+function _startPolling(runId) {
+  _doPoll(runId);
+}
+
+function _clearPolling() {
+  if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
+}
+
+async function _doPoll(runId) {
+  if (!_scanRunning) return;
+  try {
+    const params = runId ? { run_id: runId } : {};
+    const d = await apiFetch("/api/dashboard/scans/ultra/status", params);
+    updateScanProgress(d);
+    const done = ["done", "complete", "completed", "failed", "cancelled"].includes((d.status ?? "").toLowerCase());
+    if (done) {
+      _scanRunning = false;
+      _setScanBtns(false);
+      if ((d.status ?? "").toLowerCase() !== "failed") onScanComplete();
+      return;
+    }
+  } catch { /* continue polling */ }
+  _pollTimer = setTimeout(() => _doPoll(runId), 2500);
+}
+
+function updateScanProgress(status) {
+  const prog = $("scProgress");
+  if (prog) prog.innerHTML = _progressHtml(status);
+}
+
+async function onScanComplete() {
+  await ensureBootstrap(true);   // force-refresh bootstrap cache
+  const data = _bootstrap;
+  _ultraCandidates = data?.top_candidates ?? [];
+  const sectors = [...new Set(_ultraCandidates.map(c => c.sector || "").filter(Boolean))].sort();
+  const sel = $("fSector");
+  if (sel) {
+    const cur = sel.value;
+    sel.innerHTML = `<option value="">All Sectors</option>` +
+      sectors.map(s => `<option${s===cur?" selected":""}>${esc(s)}</option>`).join("");
+  }
+  applyUltraFilters();
+}
+
+function _progressHtml(s) {
+  if (!s) return "";
+  const st       = s.status ?? "unknown";
+  const scanned  = s.symbols_scanned  ?? s.processed ?? 0;
+  const total    = s.symbols_total    ?? s.total      ?? 0;
+  const saved    = s.symbols_saved    ?? s.candidates ?? 0;
+  const failed   = s.symbols_failed   ?? s.errors     ?? 0;
+  const current  = s.current_symbol   ?? s.symbol     ?? "";
+  const runId    = s.run_id           ?? _scanRunId   ?? "—";
+  const pct      = total > 0 ? Math.min(100, Math.round((scanned / total) * 100)) : 0;
+  const pillCls  = st === "running" ? "pill-running" : st === "done" || st === "completed" || st === "complete" ? "pill-done" :
+                   st === "failed"  ? "pill-failed"  : st === "cancelled" ? "pill-cancelled" : "pill-pending";
+  return `
+    <div class="scan-prog-row">
+      <span class="scan-run-id">Run: ${esc(String(runId).slice(0,16))}…</span>
+      <span class="scan-pill ${pillCls}">${esc(st)}</span>
+    </div>
+    <div class="scan-bar-wrap"><div class="scan-bar-fill" style="width:${pct}%"></div></div>
+    <div class="scan-stats">
+      <span>Scanned <b>${scanned}</b>${total ? " / " + total : ""}</span>
+      <span>Saved <b>${saved}</b></span>
+      <span>Failed <b>${failed}</b></span>
+      ${current ? `<span class="scan-current">→ ${esc(current)}</span>` : ""}
+    </div>`;
+}
+
+function _showScanError(msg) {
+  const prog = $("scProgress");
+  if (prog) prog.innerHTML = `<div class="scan-error">Scan error: ${esc(msg)}</div>`;
+}
+
+function _setProgressVisible(visible) {
+  const wrap = $("scProgressWrap");
+  if (wrap) wrap.style.display = visible ? "" : "none";
+}
+
+function _setScanBtns(running) {
+  const runBtn    = $("scRunBtn");
+  const cancelBtn = $("scCancelBtn");
+  if (runBtn)    { runBtn.disabled    = running; runBtn.textContent = running ? "Scanning…" : "⚡ Run Scan"; }
+  if (cancelBtn) { cancelBtn.disabled = !running; }
+}
 
 async function renderUltra() {
   const data = await ensureBootstrap();
   const scan = data.latest_scan ?? {};
   _ultraCandidates = data.top_candidates ?? [];
 
-  const sectors  = [...new Set(_ultraCandidates.map(c => c.sector || "").filter(Boolean))].sort();
+  const sectors    = [...new Set(_ultraCandidates.map(c => c.sector || "").filter(Boolean))].sort();
   const sectorOpts = sectors.map(s => `<option>${esc(s)}</option>`).join("");
 
   $r().innerHTML = `
@@ -334,11 +495,48 @@ async function renderUltra() {
         <div class="card"><div class="c-label">Status</div><div class="c-value" style="font-size:.9rem">${esc(scan.status ?? "—")}</div></div>
         <div class="card"><div class="c-label">Finished</div><div class="c-value" style="font-size:.7rem;padding-top:4px">${fmtDate(scan.finished_at)}</div></div>
       </div>
-      <div class="section-label">Scan Controls</div>
-      <div class="placeholder-box">
-        <span class="placeholder-icon">⚡</span>
-        <span class="placeholder-text">Scan controls — Phase 8D</span>
+
+      <div class="section-label">Ultra Scan Controls</div>
+      <div class="scan-controls-card" id="scanControls">
+        <div class="scan-safety-row">
+          <span class="safety-chip">Scheduler Disabled</span>
+          <span class="safety-chip">Full-market Disabled</span>
+          <span class="safety-chip safety-provider">Provider: Massive</span>
+        </div>
+        <div class="scan-form-row">
+          <label class="scan-label">Universe
+            <select id="scUniverse">
+              <option value="sp500_sample">S&amp;P 500 Sample</option>
+              <option value="nasdaq_sample">NASDAQ Sample</option>
+              <option value="manual_default">Manual List</option>
+            </select>
+          </label>
+          <label class="scan-label">Symbols
+            <select id="scCount">
+              <option value="10">10</option>
+              <option value="25" selected>25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+          <label class="scan-label">Scoring
+            <select id="scMode">
+              <option value="real" selected>Real</option>
+              <option value="compare">Compare</option>
+            </select>
+          </label>
+          <label class="scan-label scan-label-check">
+            <input type="checkbox" id="scReplace" checked /> Replace latest
+          </label>
+          <button class="btn-run"    id="scRunBtn"    onclick="runScan()">⚡ Run Scan</button>
+          <button class="btn-cancel" id="scCancelBtn" onclick="cancelScan()" disabled>✕ Cancel</button>
+          <button class="btn-refresh-scan" onclick="ensureBootstrap(true).then(onScanComplete)">↻ Refresh Latest</button>
+        </div>
+        <div class="scan-progress-wrap" id="scProgressWrap" style="display:none">
+          <div id="scProgress"></div>
+        </div>
       </div>
+
       <div class="section-label">Candidates</div>
       <div class="filters-bar">
         <label>Symbol
@@ -381,6 +579,16 @@ async function renderUltra() {
     ["fSearch","fBand","fSector","fMinScore"].forEach(id => { const el=$(id); if(el) el.value=""; });
     applyUltraFilters();
   });
+
+  // Restore running state if scan was in progress before navigation
+  if (_scanRunning) {
+    _setProgressVisible(true);
+    _setScanBtns(true);
+    if (_scanRunId) _startPolling(_scanRunId);
+  }
+
+  // Load sample list sizes in background (non-blocking)
+  loadSampleListsAndInit();
 }
 
 function applyUltraFilters() {

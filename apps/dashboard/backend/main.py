@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -24,8 +24,8 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "info").upper())
 
 app = FastAPI(title="dashboard", version="0.6.0")
 
-_VERSION = "0.6.0"
-_PHASE   = "8E-1-chart-proxy"
+_VERSION = "0.7.0"
+_PHASE   = "8D-ultra-scan-controls"
 
 _FRONTEND_DIR = pathlib.Path(__file__).parent.parent / "frontend"
 
@@ -93,6 +93,26 @@ def _validate_chart_sym(symbol: str) -> str | None:
     """Return uppercased symbol or None if invalid."""
     s = symbol.upper().strip()
     return s if _VALID_SYM_RE.match(s) else None
+
+
+def _scanner_post(path: str, body: dict | None = None) -> tuple[dict | None, str | None]:
+    """
+    POST {SCANNER_API_URL}{path} with 5 s timeout. Returns (data, error_message).
+    Never raises — all failures return (None, error_str).
+    """
+    if not SCANNER_API_URL:
+        return None, "SCANNER_API_URL not configured"
+    url = f"{SCANNER_API_URL}{path}"
+    try:
+        resp = httpx.post(url, json=body or {}, timeout=_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json(), None
+    except httpx.TimeoutException:
+        return None, "scanner-api timeout"
+    except httpx.HTTPStatusError as exc:
+        return None, f"scanner-api HTTP {exc.response.status_code}"
+    except Exception as exc:
+        return None, type(exc).__name__
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -551,6 +571,136 @@ def dashboard_chart_signals(
 
     data["source"]       = "dashboard-bff"
     data["proxied_from"] = "scanner-api"
+    return data
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Scan proxy — Phase 8D
+# Dashboard BFF does not call Massive. Scanner-api owns the scan.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Maps frontend universe keys to scanner-api list keys
+_UNIVERSE_MAP: dict[str, str] = {
+    "sp500_sample":   "sp500_sample",
+    "nasdaq_sample":  "nasdaq_sample",
+    "manual_default": "manual_test",
+}
+
+_VALID_UNIVERSES = set(_UNIVERSE_MAP.keys())
+_VALID_SCORING   = {"real", "compare"}
+_VALID_TF_SCAN   = {"1d"}
+
+
+@app.get("/api/dashboard/scans/ultra/sample-lists")
+def scan_sample_lists():
+    """Proxy scanner-api sample-lists for the frontend universe selector."""
+    data, err = _scanner_get("/api/scans/ultra/sample-lists")
+    if data is None:
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "error": err or "scanner-api unavailable", "source": "dashboard-bff"},
+        )
+    data["source"] = "dashboard-bff"
+    return data
+
+
+@app.post("/api/dashboard/scans/ultra/run")
+async def scan_ultra_run(request: Request):
+    """
+    Kick off a new Ultra scan via scanner-api.
+    Accepts JSON body: {symbol_count, universe, scoring_mode, timeframe, replace_latest}.
+    Fetches sample-lists from scanner-api to resolve actual symbols, slices to count,
+    then forwards symbols[] array to scanner-api POST /api/scans/ultra/run.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "invalid JSON body"})
+
+    universe     = str(body.get("universe", "sp500_sample"))
+    symbol_count = int(body.get("symbol_count", 25))
+    scoring_mode = str(body.get("scoring_mode", "real"))
+    timeframe    = str(body.get("timeframe", "1d"))
+    replace      = bool(body.get("replace_latest", True))
+
+    if universe not in _VALID_UNIVERSES:
+        return JSONResponse(status_code=422, content={"ok": False, "error": f"unknown universe: {universe}"})
+    if scoring_mode not in _VALID_SCORING:
+        return JSONResponse(status_code=422, content={"ok": False, "error": f"unknown scoring_mode: {scoring_mode}"})
+    if timeframe not in _VALID_TF_SCAN:
+        return JSONResponse(status_code=422, content={"ok": False, "error": f"unsupported timeframe: {timeframe}"})
+    if not (1 <= symbol_count <= 500):
+        return JSONResponse(status_code=422, content={"ok": False, "error": "symbol_count must be 1–500"})
+
+    # Resolve list key and fetch symbols from scanner-api
+    list_key = _UNIVERSE_MAP[universe]
+    lists_data, lists_err = _scanner_get("/api/scans/ultra/sample-lists")
+    if lists_data is None:
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "error": lists_err or "cannot fetch sample-lists", "source": "dashboard-bff"},
+        )
+
+    all_lists: dict = lists_data.get("lists", {})
+    symbols_pool: list[str] = all_lists.get(list_key, [])
+    if not symbols_pool:
+        return JSONResponse(
+            status_code=422,
+            content={"ok": False, "error": f"no symbols found for list '{list_key}'"},
+        )
+
+    symbols = symbols_pool[:symbol_count]
+
+    scan_body = {
+        "symbols":        symbols,
+        "scoring_mode":   scoring_mode,
+        "timeframe":      timeframe,
+        "replace_latest": replace,
+    }
+    data, err = _scanner_post("/api/scans/ultra/run", body=scan_body)
+    if data is None:
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "error": err or "scanner-api unavailable", "source": "dashboard-bff"},
+        )
+
+    data["source"]    = "dashboard-bff"
+    data["universe"]  = universe
+    data["list_key"]  = list_key
+    data["requested"] = len(symbols)
+    return data
+
+
+@app.get("/api/dashboard/scans/ultra/status")
+def scan_ultra_status(run_id: str | None = Query(default=None)):
+    """Proxy scanner-api scan status. Optionally filter by run_id."""
+    params = {}
+    if run_id:
+        params["run_id"] = run_id
+    data, err = _scanner_get("/api/scans/ultra/status", params=params or None)
+    if data is None:
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "error": err or "scanner-api unavailable", "source": "dashboard-bff"},
+        )
+    data["source"] = "dashboard-bff"
+    return data
+
+
+@app.post("/api/dashboard/scans/ultra/cancel")
+async def scan_ultra_cancel(request: Request):
+    """Proxy a cancel request to scanner-api."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    data, err = _scanner_post("/api/scans/ultra/cancel", body=body)
+    if data is None:
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "error": err or "scanner-api unavailable", "source": "dashboard-bff"},
+        )
+    data["source"] = "dashboard-bff"
     return data
 
 

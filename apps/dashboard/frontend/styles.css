@@ -401,6 +401,88 @@ tbody tr:last-child { border-bottom: none; }
 }
 .dim-text { color: var(--text-dim); }
 
+/* ── Ultra Scan Controls ──────────────────────────────────────────────────── */
+.scan-controls-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 10px;
+  margin-bottom: 4px;
+}
+.scan-safety-row {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.safety-chip {
+  font-size: .65rem; padding: 2px 8px; border-radius: 10px;
+  border: 1px solid var(--border2); color: var(--text-dim);
+  background: #1c2128;
+}
+.safety-provider { border-color: var(--blue); color: var(--blue); }
+.scan-form-row {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px;
+}
+.scan-label {
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: .72rem; color: var(--text-dim);
+}
+.scan-label select { font-size: .8rem; }
+.scan-label-check {
+  flex-direction: row; align-items: center; gap: 5px;
+  font-size: .78rem; color: var(--text2);
+  padding-bottom: 2px;
+}
+.btn-run {
+  padding: 5px 14px; border-radius: var(--radius);
+  background: var(--blue); color: #0d0f14; border: none;
+  font-size: .82rem; font-weight: 600; cursor: pointer;
+}
+.btn-run:hover:not(:disabled)   { filter: brightness(1.12); }
+.btn-run:disabled                { opacity: .45; cursor: default; }
+.btn-cancel {
+  padding: 5px 12px; border-radius: var(--radius);
+  background: none; color: var(--red); border: 1px solid var(--red);
+  font-size: .82rem; cursor: pointer;
+}
+.btn-cancel:hover:not(:disabled) { background: #2c1010; }
+.btn-cancel:disabled              { opacity: .35; cursor: default; }
+.btn-refresh-scan {
+  padding: 5px 10px; border-radius: var(--radius);
+  background: none; color: var(--text-dim); border: 1px solid var(--border2);
+  font-size: .78rem; cursor: pointer;
+}
+.btn-refresh-scan:hover { color: var(--text2); border-color: var(--text-dim); }
+
+/* ── Scan progress panel ──────────────────────────────────────────────────── */
+.scan-progress-wrap {
+  border-top: 1px solid var(--border2); padding-top: 10px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.scan-prog-row {
+  display: flex; align-items: center; gap: 10px;
+}
+.scan-run-id { font-size: .68rem; color: var(--text-dim); font-family: monospace; }
+.scan-pill {
+  font-size: .65rem; padding: 1px 8px; border-radius: 10px; font-weight: 600;
+  border: 1px solid var(--border2);
+}
+.pill-running   { border-color: var(--blue);  color: var(--blue);  background: #0d1520; }
+.pill-done      { border-color: #238636;       color: var(--green); background: #0d1f1a; }
+.pill-failed    { border-color: #6e1a1a;       color: var(--red);   background: #1c0a0a; }
+.pill-cancelled { border-color: var(--border2);color: var(--text-dim); }
+.pill-pending   { border-color: var(--border2);color: var(--text-dim); }
+.scan-bar-wrap {
+  height: 6px; border-radius: 3px; background: #1c2128; overflow: hidden;
+}
+.scan-bar-fill {
+  height: 100%; border-radius: 3px; background: var(--blue);
+  transition: width .3s ease;
+}
+.scan-stats {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  font-size: .72rem; color: var(--text-dim);
+}
+.scan-current { font-family: monospace; color: var(--text2); }
+.scan-error   { font-size: .8rem; color: var(--red); }
+
 /* ── Mobile: collapse sidebar to top strip ────────────────────────────────── */
 @media (max-width: 700px) {
   .app-shell { flex-direction: column; }
