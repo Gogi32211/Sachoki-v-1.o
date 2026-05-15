@@ -78,6 +78,25 @@ def _build_routing() -> dict[str, list[tuple[str, str, str]]]:
     except Exception as exc:
         log.warning("combo routing unavailable: %s", exc)
 
+    try:
+        from .chart_f_engine import F_SIG_COLS
+        routing["f"] = [(c, "f", lbl) for c, lbl in F_SIG_COLS]
+    except Exception as exc:
+        log.warning("f routing unavailable: %s", exc)
+
+    try:
+        from .chart_fly_engine import FLY_SIG_COLS
+        routing["fly"] = [(c, "fly", lbl) for c, lbl in FLY_SIG_COLS]
+    except Exception as exc:
+        log.warning("fly routing unavailable: %s", exc)
+
+    try:
+        from .chart_b_engine import B_SIG_COLS, G_SIG_COLS
+        routing["b"] = [(c, "b", lbl) for c, lbl in B_SIG_COLS]
+        routing["g"] = [(c, "g", lbl) for c, lbl in G_SIG_COLS]
+    except Exception as exc:
+        log.warning("b/g routing unavailable: %s", exc)
+
     # P1 engines wire in via the same pattern when ported:
     #   routing["f"]    = [...]    -> row "f"
     #   routing["fly"]  = [...]    -> row "fly"
@@ -127,6 +146,10 @@ def run_engines(
     vabs_df  = _run_vabs(idf, engines_ran, engines_failed)
     wick_df  = _run_wick(idf, engines_ran, engines_failed)
     combo_df = _run_combo(idf, engines_ran, engines_failed)
+    f_df     = _run_engine(idf, engines_ran, engines_failed, "f",   _import_f)
+    fly_df   = _run_engine(idf, engines_ran, engines_failed, "fly", _import_fly)
+    b_df     = _run_engine(idf, engines_ran, engines_failed, "b",   _import_b)
+    g_df     = _run_engine(idf, engines_ran, engines_failed, "g",   _import_g)
 
     # 2b. Split / reverse-split flags (per-ticker, same on every bar).
     split_flags = _resolve_split_flags(ticker, engines_ran, engines_failed)
@@ -203,10 +226,14 @@ def run_engines(
                 for label in l_combo.split():
                     _route_wlnbb_label(label, bar["signals"])
 
-        # Signals — VABS / WICK / COMBO via routing table
+        # Signals — VABS / WICK / COMBO / F / FLY / B / G via routing table
         _apply_routing(vabs_df,  ts, routing.get("vabs",  []), bar)
         _apply_routing(wick_df,  ts, routing.get("wick",  []), bar)
         _apply_routing(combo_df, ts, routing.get("combo", []), bar)
+        _apply_routing(f_df,     ts, routing.get("f",     []), bar)
+        _apply_routing(fly_df,   ts, routing.get("fly",   []), bar)
+        _apply_routing(b_df,     ts, routing.get("b",     []), bar)
+        _apply_routing(g_df,     ts, routing.get("g",     []), bar)
 
         bars.append(bar)
 
@@ -289,6 +316,39 @@ def _run_combo(idf, ran, failed):
         log.warning("combo engine failed: %s", exc)
         failed.append("combo")
         return None
+
+
+def _run_engine(idf, ran, failed, name, importer):
+    """Generic engine runner — `importer` returns the compute fn."""
+    try:
+        fn = importer()
+        out = fn(idf)
+        ran.append(name)
+        return out
+    except Exception as exc:
+        log.warning("%s engine failed: %s", name, exc)
+        failed.append(name)
+        return None
+
+
+def _import_f():
+    from .chart_f_engine import compute_f_signals
+    return compute_f_signals
+
+
+def _import_fly():
+    from .chart_fly_engine import compute_fly_series
+    return compute_fly_series
+
+
+def _import_b():
+    from .chart_b_engine import compute_b_signals
+    return compute_b_signals
+
+
+def _import_g():
+    from .chart_b_engine import compute_g_signals
+    return compute_g_signals
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
