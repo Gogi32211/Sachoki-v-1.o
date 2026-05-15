@@ -1,14 +1,16 @@
 """
-dashboard BFF — Phase 8A-P1: top-movers + best-setups endpoints.
+dashboard BFF — Phase 8E-1: chart proxy endpoints forwarding to scanner-api.
 
 Serves a minimal static HTML/JS/CSS frontend at / and keeps all BFF API
 routes intact. No scans, no scoring, no DB writes, no AI/live prices.
+Dashboard BFF does not call Massive directly — only scanner-api does.
 """
 from __future__ import annotations
 
 import logging
 import os
 import pathlib
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,10 +22,10 @@ from fastapi.staticfiles import StaticFiles
 log = logging.getLogger(__name__)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "info").upper())
 
-app = FastAPI(title="dashboard", version="0.5.0")
+app = FastAPI(title="dashboard", version="0.6.0")
 
-_VERSION = "0.5.0"
-_PHASE   = "8A-P1-top-movers-best-setups"
+_VERSION = "0.6.0"
+_PHASE   = "8E-1-chart-proxy"
 
 _FRONTEND_DIR = pathlib.Path(__file__).parent.parent / "frontend"
 
@@ -31,7 +33,13 @@ _FRONTEND_DIR = pathlib.Path(__file__).parent.parent / "frontend"
 if _FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(_FRONTEND_DIR)), name="static")
 
-_TIMEOUT = 5.0  # seconds for all scanner-api calls
+_TIMEOUT       = 5.0   # seconds for scan/dashboard calls
+_CHART_TIMEOUT = 10.0  # chart calls hit Massive via scanner-api — allow more time
+
+_VALID_SYM_RE = re.compile(r"^[A-Z]{1,5}(-[A-Z]{1,2})?$")
+_CHART_ALLOWED_TF = {"1d"}   # Phase 8E-1: daily only
+_CHART_MIN_BARS   = 20
+_CHART_MAX_BARS   = 250
 
 SCANNER_API_URL  = os.getenv("SCANNER_API_URL", "").rstrip("/")
 RESEARCH_API_URL = os.getenv("RESEARCH_API_URL", "").rstrip("/")
@@ -59,6 +67,32 @@ def _scanner_get(path: str, params: dict | None = None) -> tuple[dict | None, st
         return None, f"scanner-api HTTP {exc.response.status_code}"
     except Exception as exc:
         return None, type(exc).__name__
+
+
+def _chart_get(path: str, params: dict | None = None) -> tuple[dict | None, str | None]:
+    """
+    GET {SCANNER_API_URL}{path} with chart timeout. Returns (data, error_message).
+    Never raises — all failures return (None, error_str).
+    """
+    if not SCANNER_API_URL:
+        return None, "SCANNER_API_URL not configured"
+    url = f"{SCANNER_API_URL}{path}"
+    try:
+        resp = httpx.get(url, params=params or {}, timeout=_CHART_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json(), None
+    except httpx.TimeoutException:
+        return None, "scanner-api chart timeout"
+    except httpx.HTTPStatusError as exc:
+        return None, f"scanner-api HTTP {exc.response.status_code}"
+    except Exception as exc:
+        return None, type(exc).__name__
+
+
+def _validate_chart_sym(symbol: str) -> str | None:
+    """Return uppercased symbol or None if invalid."""
+    s = symbol.upper().strip()
+    return s if _VALID_SYM_RE.match(s) else None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -233,6 +267,7 @@ def debug_status():
     scanner_url_ok = bool(SCANNER_API_URL)
     scanner_reachable = False
     scanner_health: dict | None = None
+    chart_snapshot_reachable = False
 
     if scanner_url_ok:
         data, err = _scanner_get("/health")
@@ -242,17 +277,23 @@ def debug_status():
         else:
             scanner_health = {"error": err}
 
+        # Probe chart proxy with a lightweight signals endpoint (no Massive fetch)
+        sig_data, _ = _chart_get("/api/chart/signals")
+        chart_snapshot_reachable = sig_data is not None and "implemented" in sig_data
+
     return {
-        "service":                    "dashboard",
-        "mode":                       "scanner_api_bridge_phase",
-        "database_configured":        bool(os.getenv("DATABASE_URL")),
-        "redis_configured":           bool(os.getenv("REDIS_URL")),
-        "scanner_api_url_configured": scanner_url_ok,
-        "scanner_api_reachable":      scanner_reachable,
-        "scanner_api_health":         scanner_health,
-        "research_api_url_configured": bool(RESEARCH_API_URL),
-        "massive_configured":         bool(os.getenv("MASSIVE_API_KEY")),
-        "anthropic_configured":       bool(os.getenv("ANTHROPIC_API_KEY")),
+        "service":                          "dashboard",
+        "mode":                             "scanner_api_bridge_phase",
+        "database_configured":              bool(os.getenv("DATABASE_URL")),
+        "redis_configured":                 bool(os.getenv("REDIS_URL")),
+        "scanner_api_url_configured":       scanner_url_ok,
+        "scanner_api_reachable":            scanner_reachable,
+        "scanner_api_health":               scanner_health,
+        "research_api_url_configured":      bool(RESEARCH_API_URL),
+        "massive_configured":               bool(os.getenv("MASSIVE_API_KEY")),
+        "anthropic_configured":             bool(os.getenv("ANTHROPIC_API_KEY")),
+        "chart_proxy_available":            scanner_url_ok,
+        "scanner_chart_snapshot_reachable": chart_snapshot_reachable,
     }
 
 
@@ -399,6 +440,118 @@ def dashboard_best_setups(
         "setups":       result["setups"],
         "fallback":     result["fallback"],
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chart proxy endpoints  (Phase 8E-1)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _chart_proxy_error(sym: str | None, tf: str, bars: int | None = None) -> JSONResponse | None:
+    """Return a 422 response for invalid chart params, or None if all ok."""
+    if sym is None:
+        return JSONResponse(status_code=422, content={"error": "Invalid ticker symbol"})
+    if tf not in _CHART_ALLOWED_TF:
+        return JSONResponse(status_code=422,
+                            content={"error": f"tf must be one of {sorted(_CHART_ALLOWED_TF)}"})
+    if bars is not None and not (_CHART_MIN_BARS <= bars <= _CHART_MAX_BARS):
+        return JSONResponse(status_code=422,
+                            content={"error": f"bars must be {_CHART_MIN_BARS}–{_CHART_MAX_BARS}"})
+    return None
+
+
+@app.get("/api/dashboard/chart/candles")
+def dashboard_chart_candles(
+    symbol: str = Query(...),
+    tf:     str = Query(default="1d"),
+    bars:   int = Query(default=150),
+):
+    """Proxy /api/chart/candles from scanner-api. No Massive calls here."""
+    sym = _validate_chart_sym(symbol)
+    err = _chart_proxy_error(sym, tf, bars)
+    if err:
+        return err
+
+    data, api_err = _chart_get("/api/chart/candles",
+                                params={"symbol": sym, "tf": tf, "bars": bars})
+    if data is None:
+        return JSONResponse(status_code=503,
+                            content={"ok": False, "error": api_err or "scanner-api unavailable"})
+
+    data["source"]       = "dashboard-bff"
+    data["proxied_from"] = "scanner-api"
+    return data
+
+
+@app.get("/api/dashboard/chart/score")
+def dashboard_chart_score(
+    symbol: str = Query(...),
+    tf:     str = Query(default="1d"),
+):
+    """Proxy /api/chart/score from scanner-api. No Massive calls here."""
+    sym = _validate_chart_sym(symbol)
+    err = _chart_proxy_error(sym, tf)
+    if err:
+        return err
+
+    data, api_err = _chart_get("/api/chart/score",
+                                params={"symbol": sym, "tf": tf})
+    if data is None:
+        return JSONResponse(status_code=503,
+                            content={"ok": False, "error": api_err or "scanner-api unavailable"})
+
+    data["source"]       = "dashboard-bff"
+    data["proxied_from"] = "scanner-api"
+    return data
+
+
+@app.get("/api/dashboard/chart/snapshot")
+def dashboard_chart_snapshot(
+    symbol: str = Query(...),
+    tf:     str = Query(default="1d"),
+    bars:   int = Query(default=150),
+):
+    """
+    Proxy /api/chart/snapshot from scanner-api.
+    Main endpoint for Phase 8E-2 Superchart Preview UI.
+    """
+    sym = _validate_chart_sym(symbol)
+    err = _chart_proxy_error(sym, tf, bars)
+    if err:
+        return err
+
+    data, api_err = _chart_get("/api/chart/snapshot",
+                                params={"symbol": sym, "tf": tf, "bars": bars})
+    if data is None:
+        return JSONResponse(status_code=503,
+                            content={"ok": False, "error": api_err or "scanner-api unavailable"})
+
+    data["source"]       = "dashboard-bff"
+    data["proxied_from"] = "scanner-api"
+    return data
+
+
+@app.get("/api/dashboard/chart/signals")
+def dashboard_chart_signals(
+    symbol: str | None = Query(default=None),
+    tf:     str        = Query(default="1d"),
+    bars:   int        = Query(default=150),
+):
+    """
+    Proxy /api/chart/signals from scanner-api (implemented vs. missing signal groups).
+    symbol/tf/bars accepted for forward-compat but not forwarded — signals is static.
+    """
+    data, api_err = _chart_get("/api/chart/signals")
+    if data is None:
+        return {
+            "ok":             False,
+            "not_implemented": True,
+            "error":          api_err or "scanner-api unavailable",
+            "source":         "dashboard-bff",
+        }
+
+    data["source"]       = "dashboard-bff"
+    data["proxied_from"] = "scanner-api"
+    return data
 
 
 @app.get("/api/dashboard/top-candidates")
