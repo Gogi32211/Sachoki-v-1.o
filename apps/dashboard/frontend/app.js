@@ -326,15 +326,15 @@ async function loadSampleListsAndInit() {
     const d = await apiFetch("/api/dashboard/scans/ultra/sample-lists");
     const lists = d.lists ?? {};
     const counts = {
-      sp500_sample:  (lists.sp500_sample  ?? []).length,
-      nasdaq_sample: (lists.nasdaq_sample ?? []).length,
-      manual_test:   (lists.manual_test   ?? []).length,
+      sp500_sample:   (lists.sp500_sample   ?? []).length,
+      nasdaq_sample:  (lists.nasdaq_sample  ?? []).length,
+      manual_default: (lists.manual_default ?? []).length,
     };
     const univ = $("scUniverse");
     if (univ) {
       univ.querySelector('option[value="sp500_sample"]').textContent  = `S&P 500 Sample (${counts.sp500_sample})`;
       univ.querySelector('option[value="nasdaq_sample"]').textContent = `NASDAQ Sample (${counts.nasdaq_sample})`;
-      univ.querySelector('option[value="manual_default"]').textContent = `Manual List (${counts.manual_test})`;
+      univ.querySelector('option[value="manual_default"]').textContent = `Manual List (${counts.manual_default})`;
     }
   } catch { /* leave default labels */ }
 }

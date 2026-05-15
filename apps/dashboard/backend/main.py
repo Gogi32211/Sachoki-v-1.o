@@ -583,7 +583,7 @@ def dashboard_chart_signals(
 _UNIVERSE_MAP: dict[str, str] = {
     "sp500_sample":   "sp500_sample",
     "nasdaq_sample":  "nasdaq_sample",
-    "manual_default": "manual_test",
+    "manual_default": "manual_default",
 }
 
 _VALID_UNIVERSES = set(_UNIVERSE_MAP.keys())
@@ -641,8 +641,8 @@ async def scan_ultra_run(request: Request):
             content={"ok": False, "error": lists_err or "cannot fetch sample-lists", "source": "dashboard-bff"},
         )
 
-    all_lists: dict = lists_data.get("lists", {})
-    symbols_pool: list[str] = all_lists.get(list_key, [])
+    # scanner-api returns lists at the top level (no "lists" wrapper)
+    symbols_pool: list[str] = lists_data.get(list_key, [])
     if not symbols_pool:
         return JSONResponse(
             status_code=422,
