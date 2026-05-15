@@ -295,11 +295,22 @@ tbody tr:last-child { border-bottom: none; }
 .mover-score  { color: var(--text-dim); font-size: .72rem; text-align: right; }
 .mover-empty  { color: var(--text-dim); font-size: .8rem; padding: 16px 0; }
 
-/* ── Chart page ───────────────────────────────────────────────────────────── */
+/* ── Chart button (inline in candidate rows + setup cards) ────────────────── */
+.btn-chart {
+  background: none; border: 1px solid var(--border2); color: var(--blue);
+  border-radius: 4px; padding: 2px 7px; cursor: pointer; font-size: .78rem;
+  transition: background .12s, color .12s; line-height: 1.4;
+}
+.btn-chart:hover { background: var(--blue); color: #0d0f14; }
+
+/* ── Chart page layout ────────────────────────────────────────────────────── */
+.chart-header {
+  display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap;
+  margin-bottom: 12px;
+}
 .chart-controls {
   display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 12px 14px; margin-bottom: 4px;
+  margin-left: auto;
 }
 .chart-label {
   font-size: .68rem; color: var(--text-dim);
@@ -310,9 +321,64 @@ tbody tr:last-child { border-bottom: none; }
   border-radius: 5px; padding: 5px 10px; font-size: .8rem;
 }
 .chart-input:focus, .chart-select:focus { outline: none; border-color: var(--blue); }
-.chart-result { margin-top: 4px; }
+
+/* ── Chart body: canvas (left) + score panel (right) ──────────────────────── */
+.chart-body {
+  display: flex; gap: var(--gap); align-items: flex-start; margin-top: 4px;
+}
+.chart-canvas-col {
+  flex: 1; min-width: 0;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+}
+.lw-chart-box {
+  height: 440px; width: 100%;
+}
+.lw-unavailable {
+  height: 440px; display: flex; align-items: center; justify-content: center;
+  color: var(--text-dim); font-size: .8rem; text-align: center; padding: 20px;
+}
+
+/* ── Score panel (right column) ───────────────────────────────────────────── */
+.score-panel-col {
+  width: 210px; flex-shrink: 0;
+}
+.score-panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px;
+}
+.sp-title       { font-size: .63rem; text-transform: uppercase; letter-spacing: .06em;
+                  color: var(--text-dim); margin-bottom: 4px; }
+.sp-score-num   { font-size: 2.2rem; font-weight: 700; color: var(--green);
+                  line-height: 1.1; margin-bottom: 4px; }
+.sp-divider     { border-top: 1px solid var(--border); margin: 10px 0; }
+.sp-row         { display: flex; align-items: center; justify-content: space-between;
+                  font-size: .75rem; margin-bottom: 3px; }
+.sp-lbl         { color: var(--text-dim); font-size: .68rem; }
+.sp-engine      { font-size: .63rem; color: var(--text-dim); }
+.sp-bool-grid   { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px;
+                  font-size: .72rem; margin-bottom: 6px; }
+.sp-bool-lbl    { color: var(--text-dim); }
+.sp-yes         { color: var(--green); font-weight: 600; }
+.sp-no          { color: var(--border2); }
+.chip-bull      { border-color: #238636; color: var(--green); background: #0d1f1a; }
+.chip-bear      { border-color: #6e1a1a; color: var(--red);   background: #1c0a0a; }
+
+/* ── Chart metadata row ────────────────────────────────────────────────────── */
+.chart-meta-section { margin-top: 4px; }
+.chart-meta-chips   { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ── Misc reused in chart page ────────────────────────────────────────────── */
 .why-chips    { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
 .missing-list { list-style: none; margin: 4px 0; }
+
+/* ── Responsive: stack chart + score on narrow screens ───────────────────── */
+@media (max-width: 900px) {
+  .chart-body      { flex-direction: column; }
+  .score-panel-col { width: 100%; }
+  .chart-header    { flex-direction: column; }
+  .chart-controls  { margin-left: 0; }
+}
 
 /* ── Placeholder box ──────────────────────────────────────────────────────── */
 .placeholder-box {

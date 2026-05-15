@@ -1,9 +1,11 @@
 "use strict";
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let _bootstrap = null;   // cached bootstrap response
-let _busy      = false;
-let _page      = null;   // current page key
+let _bootstrap      = null;   // cached bootstrap response
+let _busy           = false;
+let _page           = null;   // current page key
+let _chartInstance  = null;   // lightweight-charts Chart instance
+let _pendingChartSym = null;  // symbol queued from candidate Chart button
 
 // ── DOM shortcuts ─────────────────────────────────────────────────────────────
 const $  = id => document.getElementById(id);
@@ -12,7 +14,7 @@ const $r = () => $("pageRoot");
 // ── Utilities ─────────────────────────────────────────────────────────────────
 const esc = s => String(s ?? "").replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const fmt     = (n, d = 2)  => n != null ? Number(n).toFixed(d) : "—";
+const fmt     = (n, d = 2) => n != null ? Number(n).toFixed(d) : "—";
 const fmtDate = s => { try { return new Date(s).toLocaleString(); } catch { return s ?? "—"; } };
 
 function bandClass(b) {
@@ -44,7 +46,7 @@ async function apiFetch(path, params = {}) {
   return resp.json();
 }
 
-// ── Bootstrap (shared across pages) ──────────────────────────────────────────
+// ── Bootstrap (shared across Home / Dashboard / Ultra) ────────────────────────
 async function ensureBootstrap(force = false) {
   if (_bootstrap && !force) return _bootstrap;
   _bootstrap = await apiFetch("/api/dashboard/bootstrap");
@@ -58,8 +60,7 @@ function updateCmdBar(data) {
   const health = data?.data_health ?? {};
   const sapi   = health.scanner_api ?? {};
   const reach  = sapi.reachable === true;
-
-  const meta = $("cmdMeta");
+  const meta   = $("cmdMeta");
   if (!meta) return;
   meta.innerHTML = `
     <span>Scanner: <span class="pill ${reach ? "ok" : "err"}">${reach ? "ok" : "unreachable"}</span></span>
@@ -80,6 +81,19 @@ function setNavActive(page) {
   });
 }
 
+// ── Chart instance management ─────────────────────────────────────────────────
+function _lwAvailable() {
+  return typeof LightweightCharts !== "undefined" &&
+         typeof LightweightCharts.createChart === "function";
+}
+
+function _destroyChart() {
+  if (_chartInstance) {
+    try { _chartInstance.remove(); } catch {}
+    _chartInstance = null;
+  }
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 const PAGES = ["home", "dashboard", "ultra", "chart", "research", "system"];
 
@@ -90,10 +104,14 @@ function currentPage() {
 
 async function navigate() {
   clearError();
-  _page = currentPage();
+  const newPage = currentPage();
+
+  // Destroy chart when leaving chart page
+  if (_page === "chart" && newPage !== "chart") _destroyChart();
+
+  _page = newPage;
   setNavActive(_page);
   document.title = `Sachoki · ${_page.charAt(0).toUpperCase() + _page.slice(1)}`;
-
   $r().innerHTML = `<div class="page-loading">Loading…</div>`;
 
   try {
@@ -111,9 +129,8 @@ async function refresh() {
   const btn = $("refreshBtn");
   if (btn) { btn.disabled = true; btn.classList.add("spinning"); }
   clearError();
-
   try {
-    _bootstrap = null;  // force re-fetch
+    _bootstrap = null;
     await navigate();
   } catch (err) {
     showError(`Refresh failed: ${err.message}`);
@@ -123,24 +140,25 @@ async function refresh() {
   }
 }
 
+// ── Candidate Chart button (global, called from inline onclick) ────────────────
+function openChart(sym) {
+  _pendingChartSym = String(sym).toUpperCase();
+  location.hash = "#chart";
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // PAGE: HOME
 // ═════════════════════════════════════════════════════════════════════════════
 async function renderHome() {
   let data;
-  try {
-    data = await ensureBootstrap();
-  } catch {
-    $r().innerHTML = homeError();
-    return;
-  }
+  try { data = await ensureBootstrap(); }
+  catch { $r().innerHTML = homeError(); return; }
 
   const state  = data.dashboard_state ?? "ERROR";
   const scan   = data.latest_scan ?? {};
   const sum    = data.summary ?? {};
   const health = data.data_health ?? {};
-  const sapi   = health.scanner_api ?? {};
-  const reach  = sapi.reachable === true;
+  const reach  = (health.scanner_api ?? {}).reachable === true;
 
   let bannerCls = "ready", bannerMsg = "";
   if (state === "SCAN_READY") {
@@ -162,17 +180,15 @@ async function renderHome() {
   $r().innerHTML = `
     <div class="page-container">
       <div class="state-banner ${bannerCls}">${esc(bannerMsg)}</div>
-
       <div class="section-label">Scan Summary</div>
       <div class="cards-row">
         <div class="card"><div class="c-label">Candidates</div><div class="c-value">${sum.total_candidates ?? "—"}</div><div class="c-sub">total returned</div></div>
         <div class="card"><div class="c-label">Top Score</div><div class="c-value" style="color:var(--green)">${sum.top_score ?? "—"}</div><div class="c-sub">ultra score</div></div>
         <div class="card"><div class="c-label">Run ID</div><div class="c-value" style="font-size:1.1rem">${scan.scan_run_id ?? "—"}</div><div class="c-sub">${esc(scan.source ?? "scanner-api")}</div></div>
-        <div class="card"><div class="c-label">Bands</div><div class="c-value">${Object.keys(sum.bands ?? {}).length}</div><div class="c-sub">active bands</div></div>
+        <div class="card"><div class="c-label">Bands</div><div class="c-value">${Object.keys(sum.bands ?? {}).length}</div><div class="c-sub">active</div></div>
         <div class="card"><div class="c-label">Sectors</div><div class="c-value">${Object.keys(sum.sectors ?? {}).length}</div><div class="c-sub">covered</div></div>
         <div class="card"><div class="c-label">Universe</div><div class="c-value" style="font-size:.9rem;padding-top:4px">${esc(scan.universe ?? "—")}</div><div class="c-sub">${esc(scan.timeframe ?? "—")}</div></div>
       </div>
-
       <div class="section-label">Quick Access</div>
       <div class="quick-grid">
         ${quickLinks.map(q => `
@@ -182,23 +198,11 @@ async function renderHome() {
             <span class="quick-sub">${q.sub}</span>
           </a>`).join("")}
       </div>
-
       <div class="section-label">Service Status</div>
       <div class="cards-row">
-        <div class="card">
-          <div class="c-label">Scanner API</div>
-          <div class="c-value" style="font-size:1rem">
-            <span class="pill ${reach ? "ok" : "err"}">${reach ? "reachable" : "unreachable"}</span>
-          </div>
-        </div>
-        <div class="card">
-          <div class="c-label">Last Scan</div>
-          <div class="c-value" style="font-size:.8rem;line-height:1.4">${fmtDate(scan.finished_at)}</div>
-        </div>
-        <div class="card">
-          <div class="c-label">Scan Status</div>
-          <div class="c-value" style="font-size:1rem">${esc(scan.status ?? "—")}</div>
-        </div>
+        <div class="card"><div class="c-label">Scanner API</div><div class="c-value" style="font-size:1rem"><span class="pill ${reach ? "ok" : "err"}">${reach ? "reachable" : "unreachable"}</span></div></div>
+        <div class="card"><div class="c-label">Last Scan</div><div class="c-value" style="font-size:.8rem;line-height:1.4">${fmtDate(scan.finished_at)}</div></div>
+        <div class="card"><div class="c-label">Status</div><div class="c-value" style="font-size:1rem">${esc(scan.status ?? "—")}</div></div>
       </div>
     </div>`;
 }
@@ -217,7 +221,7 @@ function homeError() {
 // PAGE: DASHBOARD
 // ═════════════════════════════════════════════════════════════════════════════
 async function renderDashboard() {
-  const data = await ensureBootstrap();
+  const data   = await ensureBootstrap();
   const movers = data.top_movers?.regular ?? {};
   const setups = data.best_setups ?? [];
   const sum    = data.summary ?? {};
@@ -228,17 +232,15 @@ async function renderDashboard() {
       <div class="movers-row">
         <div class="movers-box">
           <div class="m-title gain-title">Top Gainers</div>
-          <div id="gainersTable">${renderMoversList(movers.gainers ?? [])}</div>
+          <div>${renderMoversList(movers.gainers ?? [])}</div>
         </div>
         <div class="movers-box">
           <div class="m-title loss-title">Top Losers</div>
-          <div id="losersTable">${renderMoversList(movers.losers ?? [])}</div>
+          <div>${renderMoversList(movers.losers ?? [])}</div>
         </div>
       </div>
-
       <div class="section-label">Best Setups</div>
       <div class="setups-row">${renderSetups(setups)}</div>
-
       <div class="section-label">Distribution</div>
       <div class="dist-row">
         <div class="dist-box">
@@ -279,7 +281,10 @@ function renderSetups(setups) {
     const chgStr = chg != null ? (chg >= 0 ? "+" : "") + fmt(chg, 2) + "%" : null;
     const chgCls = chg != null && chg >= 0 ? "pos" : "neg";
     return `<div class="setup-card">
-      <div class="s-sym">${esc(s.symbol)}</div>
+      <div class="s-sym">
+        ${esc(s.symbol)}
+        <button class="btn-chart" onclick="openChart('${esc(s.symbol)}')" title="Open in Superchart" style="margin-left:6px">◈</button>
+      </div>
       <div class="s-sector">${esc(s.sector || "—")}${s.industry ? ` · ${esc(s.industry)}` : ""}</div>
       <div class="score-row">
         <span class="score-num">${s.ultra_score ?? "—"}</span>
@@ -315,7 +320,7 @@ async function renderUltra() {
   const scan = data.latest_scan ?? {};
   _ultraCandidates = data.top_candidates ?? [];
 
-  const sectors = [...new Set(_ultraCandidates.map(c => c.sector || "").filter(Boolean))].sort();
+  const sectors  = [...new Set(_ultraCandidates.map(c => c.sector || "").filter(Boolean))].sort();
   const sectorOpts = sectors.map(s => `<option>${esc(s)}</option>`).join("");
 
   $r().innerHTML = `
@@ -329,13 +334,11 @@ async function renderUltra() {
         <div class="card"><div class="c-label">Status</div><div class="c-value" style="font-size:.9rem">${esc(scan.status ?? "—")}</div></div>
         <div class="card"><div class="c-label">Finished</div><div class="c-value" style="font-size:.7rem;padding-top:4px">${fmtDate(scan.finished_at)}</div></div>
       </div>
-
       <div class="section-label">Scan Controls</div>
       <div class="placeholder-box">
         <span class="placeholder-icon">⚡</span>
         <span class="placeholder-text">Scan controls — Phase 8D</span>
       </div>
-
       <div class="section-label">Candidates</div>
       <div class="filters-bar">
         <label>Symbol
@@ -361,14 +364,13 @@ async function renderUltra() {
           <thead><tr>
             <th class="td-rank">#</th><th>Symbol</th><th>Sector</th>
             <th>Price</th><th>Chg%</th><th>Score</th><th>Band</th>
-            <th>Signal</th><th>Why Selected</th><th>Risk Flags</th>
+            <th>Signal</th><th>Why Selected</th><th>Risk Flags</th><th></th>
           </tr></thead>
           <tbody id="candidatesBody"></tbody>
         </table>
       </div>
     </div>`;
 
-  // Bind filters
   applyUltraFilters();
   ["fSearch","fBand","fSector","fMinScore"].forEach(id => {
     const el = $(id);
@@ -404,15 +406,15 @@ function renderCandidateTable(candidates) {
   const body = $("candidatesBody");
   if (!body) return;
   if (!candidates.length) {
-    body.innerHTML = `<tr class="empty-row"><td colspan="10">No candidates match the current filters.</td></tr>`;
+    body.innerHTML = `<tr class="empty-row"><td colspan="11">No candidates match the current filters.</td></tr>`;
     return;
   }
   body.innerHTML = candidates.map((c, i) => {
     const chgVal = c.change_pct;
     const chgTxt = chgVal != null ? (chgVal >= 0 ? "+" : "") + fmt(chgVal, 2) + "%" : "—";
     const chgCls = chgVal == null ? "" : chgVal >= 0 ? "pos" : "neg";
-    const why  = (c.why_selected ?? []).slice(0, 3).map(w => `<span class="chip" style="font-size:.6rem">${esc(w)}</span>`).join(" ");
-    const risk = (c.risk_flags  ?? []).map(r => `<span class="chip risk" style="font-size:.6rem">${esc(r)}</span>`).join(" ");
+    const why    = (c.why_selected ?? []).slice(0, 3).map(w => `<span class="chip" style="font-size:.6rem">${esc(w)}</span>`).join(" ");
+    const risk   = (c.risk_flags  ?? []).map(r => `<span class="chip risk" style="font-size:.6rem">${esc(r)}</span>`).join(" ");
     return `<tr>
       <td class="td-rank">${i + 1}</td>
       <td class="td-sym">${esc(c.symbol)}</td>
@@ -424,6 +426,7 @@ function renderCandidateTable(candidates) {
       <td>${c.final_signal ? `<span class="chip signal">${esc(c.final_signal)}</span>` : "—"}</td>
       <td class="td-why">${why || "—"}</td>
       <td class="td-risk">${risk || "—"}</td>
+      <td><button class="btn-chart" onclick="openChart('${esc(c.symbol)}')" title="Open in Superchart">◈</button></td>
     </tr>`;
   }).join("");
 }
@@ -432,127 +435,285 @@ function renderCandidateTable(candidates) {
 // PAGE: SUPERCHART
 // ═════════════════════════════════════════════════════════════════════════════
 async function renderChart() {
+  const initialSym = _pendingChartSym || "";
+  const autoLoad   = Boolean(_pendingChartSym);
+  _pendingChartSym = null;
+
   $r().innerHTML = `
     <div class="page-container">
-      <div class="section-label">Superchart</div>
 
-      <div class="chart-controls">
-        <label class="chart-label">Symbol
-          <input id="chartSym" type="text" placeholder="AAPL" maxlength="6" autocomplete="off" class="chart-input" />
-        </label>
-        <label class="chart-label">Timeframe
-          <select id="chartTf" class="chart-select">
-            <option value="1d" selected>1D Daily</option>
-          </select>
-        </label>
-        <label class="chart-label">Bars
-          <input id="chartBars" type="number" value="150" min="20" max="250" class="chart-input" style="width:70px" />
-        </label>
-        <button id="chartLoadBtn" class="btn-refresh" style="align-self:flex-end">Load</button>
-      </div>
-
-      <div id="chartResult" class="chart-result">
-        <div class="placeholder-box" style="margin-top:16px">
-          <span class="placeholder-icon">◈</span>
-          <span class="placeholder-text">Enter a ticker and click Load to fetch chart data</span>
+      <div class="chart-header">
+        <div>
+          <div class="section-label" style="margin:0 0 6px">Superchart Preview</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+            <span class="pill ok">Massive</span>
+            <span class="chip">1D Completed Candles</span>
+            <span class="chip" style="color:var(--text-dim)">yfinance_used=false</span>
+          </div>
+        </div>
+        <div class="chart-controls">
+          <label class="chart-label">Symbol
+            <input id="chartSym" type="text" placeholder="AAPL" maxlength="7"
+              class="chart-input" value="${esc(initialSym)}" autocomplete="off" />
+          </label>
+          <label class="chart-label">Timeframe
+            <select id="chartTf" class="chart-select">
+              <option value="1d" selected>1D Daily</option>
+            </select>
+          </label>
+          <label class="chart-label">Bars
+            <select id="chartBars" class="chart-select">
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="150" selected>150</option>
+              <option value="200">200</option>
+            </select>
+          </label>
+          <button id="chartLoadBtn" class="btn-refresh" style="align-self:flex-end;padding:6px 20px;font-size:.82rem">
+            Load Chart
+          </button>
         </div>
       </div>
+
+      <div id="chartStatus" style="margin-top:8px"></div>
+
+      <div id="chartAreaWrap" style="display:none">
+        <div class="chart-body">
+          <div class="chart-canvas-col">
+            <div id="lwChart" class="lw-chart-box"></div>
+          </div>
+          <div class="score-panel-col" id="scorePanel"></div>
+        </div>
+        <div id="chartMetaSection" class="chart-meta-section"></div>
+      </div>
+
+      <div id="chartPlaceholder" class="placeholder-box" style="margin-top:12px">
+        <span class="placeholder-icon">◈</span>
+        <span class="placeholder-text">Enter a ticker and click Load Chart</span>
+        <span class="placeholder-sub">P0 Superchart Preview · Massive · No yfinance · dashboard BFF only</span>
+      </div>
+
     </div>`;
 
   const btn = $("chartLoadBtn");
   if (btn) btn.addEventListener("click", loadChartSnapshot);
-
   const inp = $("chartSym");
   if (inp) inp.addEventListener("keydown", e => { if (e.key === "Enter") loadChartSnapshot(); });
+
+  if (autoLoad && initialSym) await loadChartSnapshot();
 }
 
 async function loadChartSnapshot() {
   const sym  = ($("chartSym")?.value ?? "").trim().toUpperCase();
   const tf   = $("chartTf")?.value ?? "1d";
   const bars = parseInt($("chartBars")?.value ?? "150", 10);
-  const result = $("chartResult");
+
+  const status      = $("chartStatus");
+  const areaWrap    = $("chartAreaWrap");
+  const placeholder = $("chartPlaceholder");
 
   if (!sym || !/^[A-Z]{1,5}(-[A-Z]{1,2})?$/.test(sym)) {
-    if (result) result.innerHTML = `<div class="state-banner error" style="margin-top:12px">Invalid ticker symbol.</div>`;
+    if (status) status.innerHTML = `<div class="state-banner error" style="margin:8px 0">Enter a valid ticker symbol.</div>`;
     return;
   }
 
-  if (result) result.innerHTML = `<div class="page-loading">Fetching ${sym} snapshot…</div>`;
+  if (status) status.innerHTML = `<div class="page-loading" style="padding:12px 0">Loading ${esc(sym)} chart data…</div>`;
+  const btn = $("chartLoadBtn");
+  if (btn) btn.disabled = true;
 
+  let data;
   try {
-    const data = await apiFetch("/api/dashboard/chart/snapshot", { symbol: sym, tf, bars });
-
-    if (!data.ok) {
-      result.innerHTML = `<div class="state-banner error" style="margin-top:12px">${esc(data.error ?? "Snapshot failed")}</div>`;
-      return;
-    }
-
-    const score  = data.score  ?? {};
-    const tz     = data.tz     ?? {};
-    const wlnbb  = data.wlnbb  ?? {};
-    const cands  = data.candles ?? [];
-    const marks  = data.markers ?? [];
-    const missing = data.missing_groups ?? [];
-
-    const bullMarks = marks.filter(m => m.shape === "arrowUp").length;
-    const bearMarks = marks.filter(m => m.shape === "arrowDown").length;
-
-    const sigItems = missing.map(g => `<li class="dim-text" style="font-size:.72rem">${esc(g)}</li>`).join("");
-
-    result.innerHTML = `
-      <div class="section-label" style="margin-top:16px">Score Panel — ${esc(sym)}</div>
-      <div class="cards-row">
-        <div class="card"><div class="c-label">Ultra Score</div><div class="c-value" style="color:var(--green)">${score.ultra_score ?? "—"}</div><div class="c-sub">Band ${esc(score.band ?? "—")}</div></div>
-        <div class="card"><div class="c-label">Price</div><div class="c-value" style="font-size:1rem">${score.price != null ? "$" + fmt(score.price, 2) : "—"}</div><div class="c-sub">${score.change_pct != null ? (score.change_pct >= 0 ? "+" : "") + fmt(score.change_pct, 2) + "%" : "—"}</div></div>
-        <div class="card"><div class="c-label">RSI</div><div class="c-value">${score.rsi != null ? fmt(score.rsi, 1) : "—"}</div></div>
-        <div class="card"><div class="c-label">T/Z Signal</div><div class="c-value" style="font-size:.9rem">${esc(tz.sig_name ?? "NONE")}</div><div class="c-sub">${tz.is_bull ? "bullish" : tz.is_bear ? "bearish" : "neutral"}</div></div>
-        <div class="card"><div class="c-label">Vol Bucket</div><div class="c-value">${esc(wlnbb.vol_bucket ?? "—")}</div></div>
-        <div class="card"><div class="c-label">Candles</div><div class="c-value">${data.bars_returned ?? "—"}</div><div class="c-sub">${tf} bars</div></div>
-      </div>
-
-      <div class="section-label">WLNBB State</div>
-      <div class="cards-row">
-        ${renderBoolCard("BLUE",     wlnbb.BLUE)}
-        ${renderBoolCard("L34",      wlnbb.L34)}
-        ${renderBoolCard("FRI34",    wlnbb.FRI34)}
-        ${renderBoolCard("BO↑",      wlnbb.BO_UP)}
-        ${renderBoolCard("BE↑",      wlnbb.BE_UP)}
-        ${renderBoolCard("PRE PUMP", wlnbb.PRE_PUMP)}
-      </div>
-
-      <div class="section-label">Signal Markers</div>
-      <div class="cards-row">
-        <div class="card"><div class="c-label">Bull Signals</div><div class="c-value" style="color:var(--green)">${bullMarks}</div><div class="c-sub">arrowUp markers</div></div>
-        <div class="card"><div class="c-label">Bear Signals</div><div class="c-value" style="color:var(--red)">${bearMarks}</div><div class="c-sub">arrowDown markers</div></div>
-        <div class="card"><div class="c-label">Sector</div><div class="c-value" style="font-size:.8rem;padding-top:4px">${esc(score.sector ?? "—")}</div></div>
-      </div>
-
-      ${(score.why_selected ?? []).length ? `
-        <div class="section-label">Why Selected</div>
-        <div class="why-chips">${(score.why_selected).map(w => `<span class="chip">${esc(w)}</span>`).join("")}</div>` : ""}
-
-      ${(score.risk_flags ?? []).length ? `
-        <div class="section-label">Risk Flags</div>
-        <div class="why-chips">${(score.risk_flags).map(r => `<span class="chip risk">${esc(r)}</span>`).join("")}</div>` : ""}
-
-      <div class="section-label">Signal Groups — Not Yet Implemented</div>
-      <ul class="missing-list">${sigItems || "<li class='dim-text' style='font-size:.72rem'>All groups implemented.</li>"}</ul>
-
-      <div style="font-size:.65rem;color:var(--text-dim);margin-top:12px">
-        Generated ${fmtDate(data.generated_at)} · source: ${esc(data.source ?? "—")} · proxied from: ${esc(data.proxied_from ?? "scanner-api")}
-      </div>`;
-
+    data = await apiFetch("/api/dashboard/chart/snapshot", { symbol: sym, tf, bars });
   } catch (err) {
-    if (result) result.innerHTML = `<div class="state-banner error" style="margin-top:12px">Failed: ${esc(err.message)}</div>`;
+    if (status) status.innerHTML = `<div class="state-banner error" style="margin:8px 0">Chart snapshot unavailable: ${esc(err.message)}</div>`;
+    if (btn) btn.disabled = false;
+    return;
+  } finally {
+    if (btn) btn.disabled = false;
   }
+
+  if (!data.ok) {
+    if (status) status.innerHTML = `<div class="state-banner error" style="margin:8px 0">${esc(data.error ?? "Snapshot failed")}</div>`;
+    return;
+  }
+
+  const candles = data.candles ?? [];
+  if (!candles.length) {
+    if (status) status.innerHTML = `<div class="state-banner warn" style="margin:8px 0">No candles returned for ${esc(sym)}.</div>`;
+    return;
+  }
+
+  if (status) status.innerHTML = "";
+  if (areaWrap)    areaWrap.style.display = "";
+  if (placeholder) placeholder.style.display = "none";
+
+  // Render chart
+  _renderLwChart(candles, data.markers ?? []);
+
+  // Render score panel
+  const scoreEl = $("scorePanel");
+  if (scoreEl) scoreEl.innerHTML = _buildScorePanel(data);
+
+  // Render metadata + missing groups
+  const metaEl = $("chartMetaSection");
+  if (metaEl) metaEl.innerHTML = _buildChartMeta(data, candles.length);
 }
 
-function renderBoolCard(label, val) {
+function _renderLwChart(candles, markers) {
+  _destroyChart();
+  const container = $("lwChart");
+  if (!container) return;
+
+  if (!_lwAvailable()) {
+    container.innerHTML = `<div class="lw-unavailable">lightweight-charts failed to load. Check network / ad-blocker.</div>`;
+    return;
+  }
+
+  const chart = LightweightCharts.createChart(container, {
+    autoSize: true,
+    layout: {
+      background: { type: "solid", color: "#161b22" },
+      textColor: "#c9d1d9",
+    },
+    grid: {
+      vertLines: { color: "#21262d" },
+      horzLines: { color: "#21262d" },
+    },
+    crosshair: { mode: 1 },
+    timeScale: { borderColor: "#30363d", timeVisible: true },
+    rightPriceScale: { borderColor: "#30363d" },
+  });
+  _chartInstance = chart;
+
+  // ── Candlestick series ────────────────────────────────────────────────────
+  const candleSeries = chart.addCandlestickSeries({
+    upColor:        "#3fb950",
+    downColor:      "#f85149",
+    wickUpColor:    "#3fb950",
+    wickDownColor:  "#f85149",
+    borderVisible:  false,
+  });
+  candleSeries.setData(candles.map(c => ({
+    time: c.time, open: c.open, high: c.high, low: c.low, close: c.close,
+  })));
+
+  // ── Volume histogram (bottom 18% of chart) ────────────────────────────────
+  const volSeries = chart.addHistogramSeries({
+    priceFormat:  { type: "volume" },
+    priceScaleId: "vol",
+  });
+  chart.priceScale("vol").applyOptions({
+    scaleMargins: { top: 0.82, bottom: 0 },
+  });
+  volSeries.setData(candles.map(c => ({
+    time:  c.time,
+    value: c.volume,
+    color: c.close >= c.open ? "#3fb95044" : "#f8514944",
+  })));
+
+  // ── T/Z markers ───────────────────────────────────────────────────────────
+  if (markers.length) {
+    candleSeries.setMarkers(markers);
+  }
+
+  chart.timeScale().fitContent();
+}
+
+// ── Score panel HTML ──────────────────────────────────────────────────────────
+function _buildScorePanel(data) {
+  const score = data.score  ?? {};
+  const tz    = data.tz     ?? {};
+  const wlnbb = data.wlnbb  ?? {};
+  const band  = score.band  || "";
+  const why   = (score.why_selected ?? []).slice(0, 5);
+  const risk  = score.risk_flags ?? [];
+
+  const isBull = tz.is_bull;
+  const isBear = tz.is_bear;
+  const sigName = tz.sig_name || "NONE";
+
+  return `
+    <div class="score-panel">
+      <div class="sp-title">Ultra Score</div>
+      <div class="sp-score-num">${score.ultra_score ?? "—"}</div>
+      <div style="margin-bottom:8px">
+        <span class="chip ${bandClass(band)}">${esc(band || "—")}</span>
+        ${score.final_signal ? `<span class="chip signal">${esc(score.final_signal)}</span>` : ""}
+      </div>
+
+      ${score.price != null ? `<div class="sp-row"><span class="sp-lbl">Price</span><span>$${fmt(score.price, 2)}</span></div>` : ""}
+      ${score.change_pct != null ? `<div class="sp-row"><span class="sp-lbl">Chg%</span><span class="${score.change_pct >= 0 ? "pos" : "neg"}">${(score.change_pct >= 0 ? "+" : "")}${fmt(score.change_pct, 2)}%</span></div>` : ""}
+      ${score.rsi != null ? `<div class="sp-row"><span class="sp-lbl">RSI</span><span>${fmt(score.rsi, 1)}</span></div>` : ""}
+      ${score.sector ? `<div class="sp-row"><span class="sp-lbl">Sector</span><span style="font-size:.68rem;color:var(--text-dim)">${esc(score.sector)}</span></div>` : ""}
+
+      <div class="sp-divider"></div>
+      <div class="sp-title">T/Z Signal</div>
+      <div class="sp-row" style="gap:8px">
+        <span class="chip ${isBull ? "chip-bull" : isBear ? "chip-bear" : ""}">${esc(sigName)}</span>
+        <span style="font-size:.68rem;color:var(--text-dim)">${isBull ? "▲ bullish" : isBear ? "▼ bearish" : "neutral"}</span>
+      </div>
+
+      <div class="sp-divider"></div>
+      <div class="sp-title">WLNBB</div>
+      <div class="sp-bool-grid">
+        ${_boolRow("BLUE",  wlnbb.BLUE)}
+        ${_boolRow("L34",   wlnbb.L34)}
+        ${_boolRow("FRI34", wlnbb.FRI34)}
+        ${_boolRow("BO↑",   wlnbb.BO_UP)}
+        ${_boolRow("BE↑",   wlnbb.BE_UP)}
+        ${_boolRow("PP",    wlnbb.PRE_PUMP)}
+      </div>
+      <div class="sp-row"><span class="sp-lbl">Vol</span><span>${esc(wlnbb.vol_bucket || "—")}</span></div>
+      ${wlnbb.cci_sma != null ? `<div class="sp-row"><span class="sp-lbl">CCI</span><span>${fmt(wlnbb.cci_sma, 1)}</span></div>` : ""}
+
+      ${why.length ? `
+        <div class="sp-divider"></div>
+        <div class="sp-title">Why Selected</div>
+        <div>${why.map(w => `<span class="chip" style="font-size:.6rem">${esc(w)}</span>`).join("")}</div>` : ""}
+
+      ${risk.length ? `
+        <div class="sp-divider"></div>
+        <div class="sp-title">Risk Flags</div>
+        <div>${risk.map(r => `<span class="chip risk" style="font-size:.6rem">${esc(r)}</span>`).join("")}</div>` : ""}
+
+      <div class="sp-divider"></div>
+      <div class="sp-engine">Engine: ${esc(score.score_engine || "—")}</div>
+      <div class="sp-engine" style="margin-top:2px">Turbo: not migrated yet</div>
+    </div>`;
+}
+
+function _boolRow(label, val) {
   const on = val === true;
-  return `<div class="card">
-    <div class="c-label">${esc(label)}</div>
-    <div class="c-value" style="font-size:1rem;color:${on ? "var(--green)" : "var(--text-dim)"}">${on ? "YES" : "no"}</div>
-  </div>`;
+  return `<span class="sp-bool-lbl">${label}</span>
+          <span class="${on ? "sp-yes" : "sp-no"}">${on ? "YES" : "no"}</span>`;
+}
+
+// ── Chart metadata + missing groups ───────────────────────────────────────────
+function _buildChartMeta(data, candleCount) {
+  const markers   = data.markers ?? [];
+  const bullM     = markers.filter(m => m.shape === "arrowUp").length;
+  const bearM     = markers.filter(m => m.shape === "arrowDown").length;
+  const missing   = data.missing_groups ?? [];
+  const lastC     = data.candles?.at?.(-1);
+
+  return `
+    <div class="section-label" style="margin-top:20px">Chart Metadata</div>
+    <div class="chart-meta-chips">
+      <span class="chip">Candles: ${candleCount}</span>
+      <span class="chip" style="color:var(--green)">Bull signals: ${bullM}</span>
+      <span class="chip" style="color:var(--red)">Bear signals: ${bearM}</span>
+      <span class="chip">TF: ${esc(data.timeframe || "1d")}</span>
+      <span class="chip">Provider: Massive</span>
+      <span class="chip">yfinance_used: false</span>
+      <span class="chip">Source: ${esc(data.source || "dashboard-bff")}</span>
+      ${lastC ? `<span class="chip">Latest: ${esc(lastC.time)}</span>` : ""}
+      ${data.generated_at ? `<span class="chip" style="color:var(--text-dim)">Generated: ${fmtDate(data.generated_at)}</span>` : ""}
+    </div>
+    ${missing.length ? `
+      <div class="section-label" style="margin-top:16px">Not Yet Migrated (Phase 8C-P1/P2)</div>
+      <div class="chart-meta-chips">
+        ${missing.map(g => `<span class="chip" style="color:var(--text-dim);border-color:var(--border);font-size:.65rem">${esc(g)}</span>`).join("")}
+      </div>` : ""}`;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -567,18 +728,10 @@ async function renderResearch() {
         <span class="placeholder-text">Research — Phase 8D / 8F</span>
         <span class="placeholder-sub">Replay, statistics, and signal history migration planned for a later phase.</span>
       </div>
-
       <div class="section-label">Research API</div>
       <div class="cards-row">
-        <div class="card">
-          <div class="c-label">Research API</div>
-          <div class="c-value" style="font-size:.9rem;color:var(--text-dim)">Not configured</div>
-          <div class="c-sub">RESEARCH_API_URL not set</div>
-        </div>
-        <div class="card">
-          <div class="c-label">Planned Features</div>
-          <div class="c-value" style="font-size:.72rem;line-height:1.5;padding-top:4px;color:var(--text-dim)">Replay · Statistics · Signal history</div>
-        </div>
+        <div class="card"><div class="c-label">Research API</div><div class="c-value" style="font-size:.9rem;color:var(--text-dim)">Not configured</div><div class="c-sub">RESEARCH_API_URL not set</div></div>
+        <div class="card"><div class="c-label">Planned</div><div class="c-value" style="font-size:.72rem;line-height:1.5;padding-top:4px;color:var(--text-dim)">Replay · Statistics · Signal history</div></div>
       </div>
     </div>`;
 }
@@ -597,35 +750,20 @@ async function renderSystem() {
     return;
   }
 
-  const bool = (v, trueLabel = "yes", falseLabel = "no") => {
-    const on = v === true;
-    return `<span style="color:${on ? "var(--green)" : "var(--text-dim)"}">${on ? trueLabel : falseLabel}</span>`;
-  };
-  const reach = status.scanner_api_reachable === true;
+  const reach      = status.scanner_api_reachable === true;
   const chartReach = status.scanner_chart_snapshot_reachable === true;
 
   $r().innerHTML = `
     <div class="page-container">
       <div class="section-label">Service Health</div>
       <div class="cards-row">
-        <div class="card">
-          <div class="c-label">Scanner API</div>
-          <div class="c-value" style="font-size:1rem">
-            <span class="pill ${reach ? "ok" : "err"}">${reach ? "reachable" : "unreachable"}</span>
-          </div>
-        </div>
-        <div class="card">
-          <div class="c-label">Chart Proxy</div>
-          <div class="c-value" style="font-size:1rem">
-            <span class="pill ${chartReach ? "ok" : "warn"}">${chartReach ? "ready" : "not verified"}</span>
-          </div>
-        </div>
-        <div class="card"><div class="c-label">DB Configured</div><div class="c-value" style="font-size:1rem">${bool(status.database_configured)}</div></div>
-        <div class="card"><div class="c-label">Redis Configured</div><div class="c-value" style="font-size:1rem">${bool(status.redis_configured)}</div></div>
-        <div class="card"><div class="c-label">Massive API</div><div class="c-value" style="font-size:1rem">${bool(status.massive_configured)}</div></div>
-        <div class="card"><div class="c-label">Research API</div><div class="c-value" style="font-size:1rem">${bool(status.research_api_url_configured)}</div></div>
+        <div class="card"><div class="c-label">Scanner API</div><div class="c-value" style="font-size:1rem"><span class="pill ${reach ? "ok" : "err"}">${reach ? "reachable" : "unreachable"}</span></div></div>
+        <div class="card"><div class="c-label">Chart Proxy</div><div class="c-value" style="font-size:1rem"><span class="pill ${chartReach ? "ok" : "warn"}">${chartReach ? "ready" : "not verified"}</span></div></div>
+        <div class="card"><div class="c-label">DB Configured</div><div class="c-value" style="font-size:1rem;color:${status.database_configured ? "var(--green)" : "var(--text-dim)"}">${status.database_configured ? "yes" : "no"}</div></div>
+        <div class="card"><div class="c-label">Redis</div><div class="c-value" style="font-size:1rem;color:${status.redis_configured ? "var(--green)" : "var(--text-dim)"}">${status.redis_configured ? "yes" : "no"}</div></div>
+        <div class="card"><div class="c-label">Massive API</div><div class="c-value" style="font-size:1rem;color:${status.massive_configured ? "var(--green)" : "var(--text-dim)"}">${status.massive_configured ? "yes" : "no"}</div></div>
+        <div class="card"><div class="c-label">Research API</div><div class="c-value" style="font-size:1rem;color:${status.research_api_url_configured ? "var(--green)" : "var(--text-dim)"}">${status.research_api_url_configured ? "yes" : "no"}</div></div>
       </div>
-
       <div class="section-label">Safety Flags</div>
       <div class="cards-row">
         <div class="card"><div class="c-label">Scheduler</div><div class="c-value" style="font-size:.9rem;color:var(--text-dim)">disabled</div></div>
@@ -633,24 +771,20 @@ async function renderSystem() {
         <div class="card"><div class="c-label">yfinance</div><div class="c-value" style="font-size:.9rem;color:var(--text-dim)">not used</div></div>
         <div class="card"><div class="c-label">AI / News</div><div class="c-value" style="font-size:.9rem;color:var(--text-dim)">not enabled</div></div>
       </div>
-
       <div class="section-label">Raw Status</div>
       <pre class="status-pre">${esc(JSON.stringify(status, null, 2))}</pre>
-
-      <div style="font-size:.65rem;color:var(--text-dim);margin-top:8px">
-        Fetched ${new Date().toLocaleString()}
-      </div>
+      <div style="font-size:.65rem;color:var(--text-dim);margin-top:8px">Fetched ${new Date().toLocaleString()}</div>
     </div>`;
 }
 
 // ── Page registry ─────────────────────────────────────────────────────────────
 const RENDERERS = {
-  home:     renderHome,
+  home:      renderHome,
   dashboard: renderDashboard,
-  ultra:    renderUltra,
-  chart:    renderChart,
-  research: renderResearch,
-  system:   renderSystem,
+  ultra:     renderUltra,
+  chart:     renderChart,
+  research:  renderResearch,
+  system:    renderSystem,
 };
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
