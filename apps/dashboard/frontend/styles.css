@@ -568,7 +568,13 @@ tbody tr:last-child { border-bottom: none; }
 }
 .ultra-table .td-rank    { color: var(--text-dim); width: 32px; }
 .ultra-table .td-sym     { font-weight: var(--fw-semibold); }
-.ultra-table .td-score   { font-weight: var(--fw-bold); color: var(--c-amber-300); }
+.ultra-table .td-score   { font-weight: var(--fw-bold); color: var(--c-amber-300); font-family: var(--font-mono); white-space: nowrap; }
+.ultra-table .td-ultra   { font-family: var(--font-mono); white-space: nowrap; }
+.ultra-table .band-aplus { background: var(--c-emerald-900); color: var(--c-emerald-200); }
+.ultra-table .band-a     { background: var(--c-green-900);   color: var(--c-green-200); }
+.ultra-table .band-b     { background: var(--c-sky-900);     color: var(--c-sky-200); }
+.ultra-table .band-c     { background: var(--c-amber-900);   color: var(--c-amber-200); }
+.ultra-table .band-d     { background: var(--c-rose-900);    color: var(--c-rose-200); }
 .ultra-table .td-rtb,
 .ultra-table .td-tz,
 .ultra-table .td-cat     { white-space: nowrap; }

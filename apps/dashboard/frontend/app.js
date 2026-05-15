@@ -779,7 +779,8 @@ async function renderUltra() {
           <thead><tr>
             <th class="td-rank">#</th>
             <th>Symbol</th>
-            <th>Score</th>
+            <th title="Turbo score (0-100). Primary sort key, score-band filter.">Score</th>
+            <th title="Ultra score banded A+/A/B/C/D">ULTRA</th>
             <th>RTB</th>
             <th>T/Z</th>
             <th>Cat</th>
@@ -884,13 +885,20 @@ function applyUltraFilters() {
     if (search && !c.symbol?.toUpperCase().includes(search)) return false;
     if (band   && c.band !== band)     return false;
     if (sector && c.sector !== sector) return false;
-    if ((c.ultra_score ?? 0) < minScore) return false;
 
-    // Score band segmented filter
+    // Phase 8I: score band + min-score filter operate on TURBO_SCORE
+    // (the primary score in old UltraScanPanel.jsx:832, line 944). ULTRA
+    // band A+/A/B/C/D is a separate banded view of ultra_score and is
+    // filtered by the "Band" dropdown above, not by these segmented
+    // buttons. Fallback to ultra_score only when turbo_score is null
+    // (e.g. legacy candidate rows or registry failure).
+    const turbo = (c.scores && c.scores.turbo_score) ?? c.turbo_score
+                ?? c.ultra_score ?? 0;
+    if (turbo < minScore) return false;
+
     const sb = _SCORE_BANDS.find(b => b.key === _selectedScoreBand);
     if (sb && sb.min != null) {
-      const s = c.ultra_score ?? 0;
-      if (s < sb.min || (sb.max != null && s > sb.max)) return false;
+      if (turbo < sb.min || (sb.max != null && turbo > sb.max)) return false;
     }
 
     // Volume segmented filter
@@ -981,7 +989,7 @@ function renderCandidateTable(candidates) {
   const body = $("candidatesBody");
   if (!body) return;
   if (!candidates.length) {
-    body.innerHTML = `<tr class="empty-row"><td colspan="14">No candidates match the current filters.</td></tr>`;
+    body.innerHTML = `<tr class="empty-row"><td colspan="15">No candidates match the current filters.</td></tr>`;
     return;
   }
   body.innerHTML = candidates.map((c, i) => {
@@ -995,7 +1003,11 @@ function renderCandidateTable(candidates) {
     const ind    = c.indicators || {};
     const signals = c.signals || {};
 
-    const score = c.ultra_score ?? scores.ultra_score;
+    // Phase 8I: Score column = REAL turbo_score (primary in old Ultra),
+    // ULTRA column = ultra_score banded A+/A/B/C/D. The two scores are
+    // distinct and computed by different engines — never aliased.
+    const turbo = scores.turbo_score ?? c.turbo_score ?? null;
+    const ultra = c.ultra_score      ?? scores.ultra_score ?? null;
     const band  = c.band || scores.band || "";
     const rtb   = scores.rtb_phase || "";
     const tz    = _firstSignal(signals, "t") || _firstSignal(signals, "z");
@@ -1011,10 +1023,21 @@ function renderCandidateTable(candidates) {
     const catBadge = cat ? `<span class="chip cat-${esc(cat.toLowerCase())}">${esc(cat)}</span>` : "—";
     const rtbBadge = rtb ? `<span class="rtb-pill ${_rtbCellClass(rtb)}">${esc(rtb)}</span>` : "—";
 
+    // Turbo tier emoji (matches old UltraScanPanel: 65+ 🔥, 50+ ★, 35+ ▲)
+    const turboTier = turbo == null ? "" :
+                      turbo >= 65   ? "🔥" :
+                      turbo >= 50   ? "★"  :
+                      turbo >= 35   ? "▲"  : "";
+    const turboCell = turbo == null ? "—" :
+                      `${turboTier} ${fmt(turbo, 0)}`;
+    const ultraCell = ultra == null ? "—" :
+                      `<span class="chip band-${esc((band || "").replace('+','plus').toLowerCase())}">${fmt(ultra, 0)} ${esc(band || "")}</span>`;
+
     return `<tr>
       <td class="td-rank">${i + 1}</td>
       <td class="td-sym">★ ${esc(c.symbol)}</td>
-      <td class="td-score">${score ?? "—"}</td>
+      <td class="td-score">${turboCell}</td>
+      <td class="td-ultra">${ultraCell}</td>
       <td class="td-rtb">${rtbBadge}</td>
       <td class="td-tz">${tzBadge}</td>
       <td class="td-cat">${catBadge}</td>

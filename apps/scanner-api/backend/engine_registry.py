@@ -167,9 +167,25 @@ def run_engines(
 
     routing = _build_routing()
 
+    # Phase 8I: stateful RTB + Turbo per-bar carry-forward state.
+    # calc_rtb_v4 is stateful — earlier bars' phase/age/streak feed the
+    # next bar. We accumulate `rtb_history` (most-recent-first) of fully-
+    # populated row dicts so RTB's _any_sig / _any_w / _any_tz helpers can
+    # look back 3-15 bars without re-querying engine DataFrames.
+    rtb_prev_phase   = "0"
+    rtb_prev_age     = 0
+    rtb_soft_streak  = 0
+    rtb_pending      = ""
+    rtb_pending_n    = 0
+    rtb_history: list[dict] = []
+    # Profile for turbo scoring — sp500 is the default; nasdaq / all_us
+    # selection should come from universe metadata (ticker is per-symbol,
+    # so we use 'sp500' until a universe-context arg lands here).
+    turbo_profile = "sp500"
+
     # 3. Build per-bar normalized objects.
     bars: list[dict[str, Any]] = []
-    for ts, row in idf.iterrows():
+    for pos, (ts, row) in enumerate(idf.iterrows()):
         date_str         = _ts_date(ts)
         display_date_str = _ts_display(ts, timeframe)
         dt_iso           = _ts_iso(ts)
@@ -267,12 +283,61 @@ def run_engines(
             gs = gog_row.get("GOG_SCORE")
             if gs is not None and gs == gs:  # not NaN
                 bar["scores"]["score_reason"] = f"GOG_TIER={gog_row.get('GOG_TIER','')}"
-        # Tier-derived RTB phase + turbo_score alias
+
+        # ── Phase 8I: REAL Turbo + RTB scoring (replaces 8G approximation) ──
+        # Build the flat row dict the verbatim-ported scorers expect, run
+        # stateful calc_rtb_v4, then compute_turbo_score on the same row.
         try:
-            from .chart_rtb_engine import fill_scores_from_bar
-            fill_scores_from_bar(bar)
+            from .chart_turbo_row_builder import build_turbo_row
+            from .chart_rtb_engine import calc_rtb_v4
+            from .chart_turbo_engine import compute_turbo_score
+
+            trow = build_turbo_row(
+                pos, idf,
+                tz_df=tz_df, wl_df=wl_df, vabs_df=vabs_df,
+                combo_df=combo_df, f_df=f_df, fly_df=fly_df,
+                b_df=b_df, g_df=g_df,
+                u260_df=u260_df, uv2_df=uv2_df, gog_df=gog_df,
+            )
+
+            # 1) RTB v4 — stateful per-bar phase engine
+            rtb = calc_rtb_v4(
+                trow, rtb_history,
+                rtb_prev_phase, rtb_prev_age,
+                rtb_soft_streak, rtb_pending, rtb_pending_n,
+            )
+            # Merge RTB results into row so Turbo can read rtb_phase /
+            # rtb_transition as scoring inputs (NASDAQ + ALL-US profiles).
+            trow.update(rtb)
+            # Advance carry-forward state for the next bar
+            rtb_prev_phase  = rtb["rtb_phase"]
+            rtb_prev_age    = rtb["rtb_phase_age"]
+            rtb_soft_streak = rtb["_soft_streak"]
+            rtb_pending     = rtb["_pending_phase"]
+            rtb_pending_n   = rtb["_pending_phase_count"]
+
+            # Update history (most-recent-first; cap at 15 bars covering
+            # the longest lookback in old turbo's ALL-US combo bonuses).
+            rtb_history = [trow] + rtb_history[:14]
+
+            # 2) Turbo score — verbatim _calc_turbo_score formula
+            turbo_score = compute_turbo_score(trow, profile=turbo_profile)
+
+            # 3) Surface into bar.scores
+            scores = bar["scores"]
+            scores["turbo_score"]    = turbo_score
+            scores["rtb_phase"]      = rtb["rtb_phase"]
+            scores["rtb_total"]      = rtb["rtb_total"]
+            scores["rtb_build"]      = rtb["rtb_build"]
+            scores["rtb_turn"]       = rtb["rtb_turn"]
+            scores["rtb_ready"]      = rtb["rtb_ready"]
+            scores["rtb_bonus3"]     = rtb["rtb_bonus3"]
+            scores["rtb_late"]       = rtb["rtb_late"]
+            scores["rtb_transition"] = rtb["rtb_transition"]
+            scores["rtb_phase_age"]  = rtb["rtb_phase_age"]
         except Exception as exc:
-            log.warning("rtb fill failed: %s", exc)
+            log.warning("turbo/rtb scoring failed at pos=%d: %s", pos, exc)
+            engines_failed.append("turbo_rtb")
 
         bars.append(bar)
 
