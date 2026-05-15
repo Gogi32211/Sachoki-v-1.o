@@ -97,14 +97,19 @@ def _build_routing() -> dict[str, list[tuple[str, str, str]]]:
     except Exception as exc:
         log.warning("b/g routing unavailable: %s", exc)
 
-    # P1 engines wire in via the same pattern when ported:
-    #   routing["f"]    = [...]    -> row "f"
-    #   routing["fly"]  = [...]    -> row "fly"
-    #   routing["b"]    = [...]    -> row "b"
-    #   routing["gog_setup"]   = [...]    -> row "setup"
-    #   routing["gog_tier"]    = [...]    -> row "gog"
-    #   routing["gog_context"] = [...]    -> row "ctx"
-    #   routing["ult"]  = [...]    -> row "ult"
+    try:
+        from .chart_ultra_engine import ULT_SIG_COLS
+        routing["ult"] = [(c, "ult", lbl) for c, lbl in ULT_SIG_COLS]
+    except Exception as exc:
+        log.warning("ult routing unavailable: %s", exc)
+
+    try:
+        from .chart_gog_engine import GOG_SETUP_COLS, GOG_TIER_COLS, GOG_CTX_COLS
+        routing["gog_setup"] = [(c, "setup", lbl) for c, lbl in GOG_SETUP_COLS]
+        routing["gog_tier"]  = [(c, "gog",   lbl) for c, lbl in GOG_TIER_COLS]
+        routing["gog_ctx"]   = [(c, "ctx",   lbl) for c, lbl in GOG_CTX_COLS]
+    except Exception as exc:
+        log.warning("gog routing unavailable: %s", exc)
 
     return routing
 
@@ -150,6 +155,12 @@ def run_engines(
     fly_df   = _run_engine(idf, engines_ran, engines_failed, "fly", _import_fly)
     b_df     = _run_engine(idf, engines_ran, engines_failed, "b",   _import_b)
     g_df     = _run_engine(idf, engines_ran, engines_failed, "g",   _import_g)
+    u260_df  = _run_engine(idf, engines_ran, engines_failed, "ult260", _import_u260)
+    uv2_df   = _run_engine(idf, engines_ran, engines_failed, "ult_v2", _import_uv2)
+
+    # GOG depends on every prior engine's output. Run last; pass None safely.
+    gog_df = _run_gog(idf, tz_df, wl_df, f_df, vabs_df, u260_df, uv2_df, combo_df,
+                     engines_ran, engines_failed)
 
     # 2b. Split / reverse-split flags (per-ticker, same on every bar).
     split_flags = _resolve_split_flags(ticker, engines_ran, engines_failed)
@@ -234,6 +245,21 @@ def run_engines(
         _apply_routing(fly_df,   ts, routing.get("fly",   []), bar)
         _apply_routing(b_df,     ts, routing.get("b",     []), bar)
         _apply_routing(g_df,     ts, routing.get("g",     []), bar)
+        # ULT row — merge 260308/L88 (u260_df) + ULTRA v2 (uv2_df) columns
+        if u260_df is not None and ts in u260_df.index:
+            row = u260_df.loc[ts]
+            for col, _row_key, label in routing.get("ult", []):
+                if col in u260_df.columns and bool(row.get(col, False)):
+                    bar["signals"]["ult"].append(label)
+        if uv2_df is not None and ts in uv2_df.index:
+            row = uv2_df.loc[ts]
+            for col, _row_key, label in routing.get("ult", []):
+                if col in uv2_df.columns and bool(row.get(col, False)):
+                    bar["signals"]["ult"].append(label)
+        # GOG -> SETUP, GOG, CTX rows
+        _apply_routing(gog_df, ts, routing.get("gog_setup", []), bar)
+        _apply_routing(gog_df, ts, routing.get("gog_tier",  []), bar)
+        _apply_routing(gog_df, ts, routing.get("gog_ctx",   []), bar)
 
         bars.append(bar)
 
@@ -349,6 +375,31 @@ def _import_b():
 def _import_g():
     from .chart_b_engine import compute_g_signals
     return compute_g_signals
+
+
+def _import_u260():
+    from .chart_ultra_engine import compute_260308_l88
+    return compute_260308_l88
+
+
+def _import_uv2():
+    from .chart_ultra_engine import compute_ultra_v2
+    return compute_ultra_v2
+
+
+def _run_gog(idf, tz_df, wl_df, f_df, vabs_df, u260_df, uv2_df, combo_df,
+             ran, failed):
+    """GOG depends on outputs of every prior engine."""
+    try:
+        from .chart_gog_engine import compute_gog_signals
+        out = compute_gog_signals(idf, wl_df, tz_df, f_df, vabs_df,
+                                  u260_df, uv2_df, combo_df)
+        ran.append("gog")
+        return out
+    except Exception as exc:
+        log.warning("gog engine failed: %s", exc)
+        failed.append("gog")
+        return None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
