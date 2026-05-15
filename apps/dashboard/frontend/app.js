@@ -699,11 +699,14 @@ async function renderUltra() {
             </select>
           </label>
           <label class="scan-label">Symbols
-            <select id="scCount">
+            <select id="scCount" title="MAX uses the entire universe list. Upstream cap is governed by SCANNER_MAX_SYMBOLS env.">
               <option value="10">10</option>
               <option value="25" selected>25</option>
               <option value="50">50</option>
               <option value="100">100</option>
+              <option value="250">250</option>
+              <option value="500">500</option>
+              <option value="0">MAX</option>
             </select>
           </label>
           <label class="scan-label">Scoring

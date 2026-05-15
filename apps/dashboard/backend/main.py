@@ -699,8 +699,11 @@ async def scan_ultra_run(request: Request):
         return JSONResponse(status_code=422, content={"ok": False, "error": f"unknown scoring_mode: {scoring_mode}"})
     if timeframe not in _VALID_TF_SCAN:
         return JSONResponse(status_code=422, content={"ok": False, "error": f"unsupported timeframe: {timeframe}"})
-    if not (1 <= symbol_count <= 500):
-        return JSONResponse(status_code=422, content={"ok": False, "error": "symbol_count must be 1–500"})
+    # Hard cap is governed by scanner-api SCANNER_MAX_SYMBOLS env. BFF only
+    # rejects negatives; `0` is a sentinel meaning "take the entire list".
+    # Upstream returns 422 if the resolved count exceeds its env cap.
+    if symbol_count < 0:
+        return JSONResponse(status_code=422, content={"ok": False, "error": "symbol_count must be >= 0"})
 
     # Resolve list key and fetch symbols from scanner-api
     list_key = _UNIVERSE_MAP[universe]
@@ -719,7 +722,9 @@ async def scan_ultra_run(request: Request):
             content={"ok": False, "error": f"no symbols found for list '{list_key}'"},
         )
 
-    symbols = symbols_pool[:symbol_count]
+    # symbol_count=0 (or absent) means "take the entire list" — useful for
+    # filling the DB from a full universe in one click.
+    symbols = symbols_pool if symbol_count == 0 else symbols_pool[:symbol_count]
 
     scan_body = {
         "symbols":        symbols,

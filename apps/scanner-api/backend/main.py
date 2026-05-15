@@ -37,7 +37,7 @@ _CAND_TABLE = "ultra_scan_candidates"
 _SAFE_SORT_COLS = {"ultra_score", "ticker", "created_at"}
 
 # ── Controlled scan config ────────────────────────────────────────────────────
-_MAX_SYMBOLS        = 500
+_MAX_SYMBOLS        = int(os.environ.get("SCANNER_MAX_SYMBOLS", "500"))
 _ALLOWED_TIMEFRAMES = ["1d"]
 _ALLOWED_UNIVERSES  = {
     "manual_test", "sp500_sample", "nasdaq_sample",
