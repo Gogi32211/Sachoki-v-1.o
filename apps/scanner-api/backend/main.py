@@ -695,17 +695,25 @@ def _build_summary_json(scan_result: dict) -> dict:
     sector_counts: dict[str, int] = {}
     signal_counts: dict[str, int] = {}
     top_score = 0
+    top_gainer: dict | None = None
+    top_loser:  dict | None = None
     for c in candidates:
         b = c.get("band") or "?"
         band_counts[b] = band_counts.get(b, 0) + 1
         s = c.get("sector") or ""
-        if s:
+        if s and s != "Unknown":
             sector_counts[s] = sector_counts.get(s, 0) + 1
         if (c.get("ultra_score") or 0) > top_score:
             top_score = c.get("ultra_score") or 0
         for sig in (c.get("signals") or c.get("why_selected") or []):
             if sig:
                 signal_counts[sig] = signal_counts.get(sig, 0) + 1
+        chg = c.get("change_pct")
+        if chg is not None:
+            if top_gainer is None or chg > (top_gainer.get("change_pct") or 0):
+                top_gainer = {"symbol": c.get("symbol"), "change_pct": chg}
+            if top_loser is None or chg < (top_loser.get("change_pct") or 0):
+                top_loser = {"symbol": c.get("symbol"), "change_pct": chg}
     return {
         "scan_mode":         scan_result["scan_mode"],
         "score_engine":      scan_result["score_engine"],
@@ -715,6 +723,8 @@ def _build_summary_json(scan_result: dict) -> dict:
         "symbols_failed":    scan_result["symbols_failed"],
         "candidates_saved":  scan_result["candidates_saved"],
         "top_score":         top_score,
+        "top_gainer":        top_gainer,
+        "top_loser":         top_loser,
         "band_counts":       band_counts,
         "sector_counts":     sector_counts,
         "signal_counts":     dict(sorted(signal_counts.items(), key=lambda x: -x[1])),

@@ -149,10 +149,12 @@ def compute_signals(df: pd.DataFrame) -> dict:
         if len(close) >= 6:
             mom5 = (float(close.iloc[-1]) / float(close.iloc[-6]) - 1) * 100
 
-        price   = float(close.iloc[-1])
-        rsi_now = float(rsi.iloc[-1]) if not np.isnan(rsi.iloc[-1]) else None
-        ema20_v = float(ema20.iloc[-1])
-        ema50_v = float(ema50.iloc[-1])
+        price      = float(close.iloc[-1])
+        prev_close = float(close.iloc[-2]) if len(close) >= 2 else None
+        change_pct = round((price - prev_close) / prev_close * 100, 2) if prev_close else None
+        rsi_now    = float(rsi.iloc[-1]) if not np.isnan(rsi.iloc[-1]) else None
+        ema20_v    = float(ema20.iloc[-1])
+        ema50_v    = float(ema50.iloc[-1])
 
         ema_cross_up = False
         for i in range(max(1, len(ema20) - 5), len(ema20)):
@@ -163,6 +165,8 @@ def compute_signals(df: pd.DataFrame) -> dict:
 
         return {
             "price":             round(price, 2),
+            "prev_close":        round(prev_close, 2) if prev_close is not None else None,
+            "change_pct":        change_pct,
             "rsi":               round(rsi_now, 1) if rsi_now is not None else None,
             "ema20":             round(ema20_v, 2),
             "ema50":             round(ema50_v, 2),
@@ -256,11 +260,12 @@ def score_candidate(symbol: str, signals: dict) -> dict:
         "symbol":               symbol,
         "ticker":               symbol,
         "company":              "",
-        "sector":               "",
-        "industry":             "",
+        "sector":               "",      # filled by run_controlled_scan via sector_map
+        "industry":             "",      # filled by run_controlled_scan via sector_map
         # Price / market data
         "price":                signals.get("price"),
-        "change_pct":           None,
+        "prev_close":           signals.get("prev_close"),
+        "change_pct":           signals.get("change_pct"),
         "volume":               None,
         # Scores
         "ultra_score":          score,
@@ -366,9 +371,15 @@ def run_controlled_scan(
                 candidate = score_candidate(sym, signals)
 
             candidate["timeframe"] = timeframe
+            # Sector enrichment — static map, never raises
+            from .sector_map import get_sector_info
+            sector_info = get_sector_info(sym)
+            candidate["sector"]   = sector_info["sector"]
+            candidate["industry"] = sector_info["industry"]
             results.append(candidate)
-            log.info("scanned %s → score=%s band=%s engine=%s",
-                     sym, candidate["ultra_score"], candidate["band"], scoring_mode)
+            log.info("scanned %s → score=%s band=%s sector=%s engine=%s",
+                     sym, candidate["ultra_score"], candidate["band"],
+                     sector_info["sector"], scoring_mode)
         except Exception as exc:
             log.warning("scan error for %s: %s", sym, exc)
             errors.append({"symbol": sym, "stage": "unknown", "error": type(exc).__name__})

@@ -132,12 +132,13 @@ def compute_scanner_ultra_candidate(
         "symbol":    symbol,
         "ticker":    symbol,
         "company":   base.get("company", ""),
-        "sector":    base.get("sector", ""),
-        "industry":  base.get("industry", ""),
+        "sector":    base.get("sector", ""),      # filled by run_controlled_scan via sector_map
+        "industry":  base.get("industry", ""),    # filled by run_controlled_scan via sector_map
         # Price / market data
-        "price":     signals.get("price"),
-        "change_pct": base.get("change_pct"),
-        "volume":    base.get("volume"),
+        "price":      signals.get("price"),
+        "prev_close": signals.get("prev_close"),
+        "change_pct": signals.get("change_pct"),
+        "volume":     base.get("volume"),
         # Real Ultra scores
         "ultra_score":          scored["ultra_score"],
         "ultra_score_band_v2":  scored["ultra_score_band_v2"],
