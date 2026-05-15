@@ -335,6 +335,24 @@ def run_engines(
             scores["rtb_late"]       = rtb["rtb_late"]
             scores["rtb_transition"] = rtb["rtb_transition"]
             scores["rtb_phase_age"]  = rtb["rtb_phase_age"]
+
+            # 4) Stash the fully-populated row on the bar so downstream
+            #    scoring (ultra_score) can run on the SAME row that produced
+            #    turbo and rtb. This is the single-source-of-truth fix that
+            #    matches old ultra_orchestrator._attach_ultra_score(row)
+            #    which received the Turbo row verbatim. Without this, ultra
+            #    and turbo were computed on two parallel rows — the bug the
+            #    user spotted as "ultra shows rtb-looking score".
+            #
+            #    Stored under an underscore key so it stays in-process and
+            #    doesn't pollute the JSON response that goes to the client.
+            #    scan_engine + scoring_adapter read it; main._normalize_candidate
+            #    drops it.
+            #    Also includes turbo_score in the row (turbo finished writing
+            #    above) so ultra_score, which reads signal+context fields,
+            #    sees a consistent row.
+            trow["turbo_score"] = turbo_score
+            bar["_turbo_row"]   = trow
         except Exception as exc:
             log.warning("turbo/rtb scoring failed at pos=%d: %s", pos, exc)
             engines_failed.append("turbo_rtb")

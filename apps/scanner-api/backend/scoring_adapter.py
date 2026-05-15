@@ -179,7 +179,24 @@ def compute_scanner_ultra_candidate(
     """
     from .ultra_score import compute_ultra_score
 
-    row    = _map_signals_to_row(symbol, signals, df, latest_bar=latest_bar)
+    # ── Phase 8I-fix: single-row scoring ─────────────────────────────────────
+    # Old `ultra_orchestrator._attach_ultra_score(row)` passed the FULL Turbo
+    # row (with rtb_phase, turbo_score, every signal flag) directly to
+    # compute_ultra_score. The Phase 8H+8I scoring_adapter was rebuilding a
+    # synthetic row from signal labels — that meant turbo and ultra were
+    # scored on TWO parallel rows, breaking single-source-of-truth.
+    #
+    # New rule: if engine_registry already produced a turbo_row for this
+    # bar, use it verbatim. Only fall back to _map_signals_to_row when the
+    # registry didn't run (legacy / fast path / scoring_mode='temporary').
+    turbo_row = (latest_bar or {}).get("_turbo_row") if latest_bar else None
+    if turbo_row:
+        row = dict(turbo_row)   # copy so we don't mutate the bar's row
+        row.setdefault("symbol", symbol)
+        row.setdefault("ticker", symbol)
+        row["_signal_source"] = "engine_registry_turbo_row"
+    else:
+        row = _map_signals_to_row(symbol, signals, df, latest_bar=latest_bar)
     scored = compute_ultra_score(row)
     base   = temp_candidate or {}
 

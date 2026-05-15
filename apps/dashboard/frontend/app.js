@@ -1030,7 +1030,15 @@ function renderCandidateTable(candidates) {
                       turbo >= 35   ? "▲"  : "";
     const turboCell = turbo == null ? "—" :
                       `${turboTier} ${fmt(turbo, 0)}`;
-    const ultraCell = ultra == null ? "—" :
+
+    // ULTRA cell — only render banded chip when the score is from the same
+    // row that produced turbo (signal_source == "engine_registry_turbo_row").
+    // Old Ultra showed "—" until Stage-2 enrichment landed; in our system
+    // without profile_playbook + delta_engine + tz_intel ports, the ultra
+    // score is partial. Showing "—" is more honest than a misleading number.
+    const ultraTrustworthy =
+      c.signal_source === "engine_registry_turbo_row" && ultra != null;
+    const ultraCell = !ultraTrustworthy ? "—" :
                       `<span class="chip band-${esc((band || "").replace('+','plus').toLowerCase())}">${fmt(ultra, 0)} ${esc(band || "")}</span>`;
 
     return `<tr>
