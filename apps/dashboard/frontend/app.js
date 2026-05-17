@@ -524,6 +524,9 @@ function _setAdminButtons(disabled) {
   for (const id of ["adminSyncBtn", "adminScanBtn", "adminGenBtn", "adminPipeBtn"]) {
     const b = $(id); if (b) b.disabled = disabled;
   }
+  // Stop button is the inverse: enabled while scan is running
+  const stop = $("adminStopBtn");
+  if (stop) stop.disabled = !disabled;
 }
 
 // Run a scan from the System page (no Ultra-page DOM dependency).
@@ -535,11 +538,11 @@ async function _adminRunScanFromSystem(opts) {
     _setAdminStatus(_adminRichProgress({phase:"pipeline",state:"warn",title:"Paste ADMIN_TOKEN above first",detail:"Required for every admin operation. Stored only in localStorage."}));
     return { ok: false, error: "no_token" };
   }
-  const universe    = (opts && opts.universe)    || localStorage.getItem("sachoki_pipe_universe")     || "sp500_sample";
-  // 0 = MAX (scan the entire universe). Override per-call via opts or by
-  // setting localStorage.sachoki_pipe_count.
-  const symbol_count= (opts && opts.symbol_count) ?? parseInt(localStorage.getItem("sachoki_pipe_count") || "0", 10);
-  const scoring_mode= (opts && opts.scoring_mode) || localStorage.getItem("sachoki_pipe_scoring")      || "real";
+  // Read from admin panel selects if present (System page), otherwise localStorage fallback
+  const universe    = (opts && opts.universe)    || $("adminUniverse")?.value || localStorage.getItem("sachoki_pipe_universe") || "sp500_sample";
+  const symbol_count= (opts && opts.symbol_count) != null ? opts.symbol_count
+                      : parseInt($("adminSymCount")?.value ?? localStorage.getItem("sachoki_pipe_count") ?? "0", 10);
+  const scoring_mode= (opts && opts.scoring_mode) || $("adminScoring")?.value  || localStorage.getItem("sachoki_pipe_scoring") || "real";
   const replace     = (opts && opts.replace) ?? (localStorage.getItem("sachoki_pipe_replace") !== "false");
 
   const scanStartedAt = Date.now();
@@ -667,7 +670,11 @@ async function _adminSyncMarketData(opts) {
         phase: "sync", state: "error",
         title: `Sync failed (HTTP ${resp.status})`,
         startedAt: syncStartedAt,
-        detail: esc(result.error || result.detail || ""),
+        detail: resp.status === 401
+          ? "❌ Wrong ADMIN TOKEN — check Railway → scanner-api Variables → ADMIN_TOKEN and paste it above."
+          : resp.status === 503
+          ? "⚠ ADMIN_TOKEN not configured on scanner-api. Add it to Railway Variables."
+          : esc(result.error || result.detail || ""),
       }));
       return { ok: false, error: result.error || `HTTP ${resp.status}` };
     }
@@ -724,7 +731,11 @@ async function _adminGenerateViews(opts) {
         phase: "generate", state: "error",
         title: `Generate failed (HTTP ${resp.status})`,
         startedAt: genStartedAt,
-        detail: esc(result.error || result.detail || ""),
+        detail: resp.status === 401
+          ? "❌ Wrong ADMIN TOKEN — check Railway → scanner-api Variables → ADMIN_TOKEN and paste it above."
+          : resp.status === 503
+          ? "⚠ ADMIN_TOKEN not configured on scanner-api. Add it to Railway Variables."
+          : esc(result.error || result.detail || ""),
       }));
       return { ok: false, error: result.error || `HTTP ${resp.status}` };
     }
@@ -2132,9 +2143,44 @@ async function renderSystem() {
         <div class="admin-token-row">
           <label class="admin-token-label">
             <span>ADMIN TOKEN</span>
-            <input type="password" id="adminTokenInput" placeholder="paste ADMIN_TOKEN to enable controls" autocomplete="off" />
+            <input type="password" id="adminTokenInput" placeholder="paste ADMIN_TOKEN from Railway → Variables" autocomplete="off" />
           </label>
-          <span class="admin-token-hint">🔒 Stored in this browser only (localStorage). Required for every admin action below.</span>
+          <div class="admin-token-meta">
+            <span class="admin-token-hint">🔒 Stored in this browser only (localStorage). Required for Sync + Generate. Run Scan does <b>not</b> need it.</span>
+            <span class="admin-token-status" id="adminTokenStatus"></span>
+          </div>
+        </div>
+
+        <div class="admin-scan-opts">
+          <label class="admin-scan-opt-label">Universe
+            <select id="adminUniverse">
+              <option value="sp500_sample">S&amp;P 500 Sample (~100)</option>
+              <option value="nasdaq_sample">NASDAQ Sample (~100)</option>
+              <option value="split_universe">Split Universe (500–2000+)</option>
+            </select>
+          </label>
+          <label class="admin-scan-opt-label">Symbols
+            <select id="adminSymCount">
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="250">250</option>
+              <option value="500">500</option>
+              <option value="1000">1000</option>
+              <option value="0" selected>MAX (entire universe)</option>
+            </select>
+          </label>
+          <label class="admin-scan-opt-label">Timeframe
+            <select id="adminTimeframe" disabled title="Only 1-day bars are currently supported. Daily candles from Massive.">
+              <option value="1d" selected>1d (Daily bars · Massive)</option>
+            </select>
+          </label>
+          <label class="admin-scan-opt-label">Scoring
+            <select id="adminScoring">
+              <option value="real" selected>Real (14 engines)</option>
+              <option value="compare">Compare</option>
+            </select>
+          </label>
         </div>
 
         <div class="admin-grid">
@@ -2145,11 +2191,11 @@ async function renderSystem() {
               <span class="admin-action-badge">Step 1</span>
             </div>
             <div class="admin-action-meta">
-              <div><b>What:</b> pulls fresh OHLCV bars from Massive HTTP into the <code>market_bars</code> cache (owned by market-data-api).</div>
-              <div><b>When:</b> first run of the day, or any time you suspect stale bars. Skip if you just ran it.</div>
-              <div><b>Why:</b> every scan reads bars from this cache. A cold cache = slow scan (~1-2s/symbol). A warm cache = fast scan (~50ms/symbol).</div>
+              <div><b>What:</b> pulls fresh OHLCV bars (1d · Massive) into the <code>market_bars</code> cache for the selected universe. Bars older than today are skipped (cache hit).</div>
+              <div><b>When:</b> once per day, before scanning. A warm cache makes scan ~50ms/symbol vs ~2s cold.</div>
+              <div><b>Needs token:</b> yes — Sync writes to <code>market_bars</code>.</div>
             </div>
-            <button class="btn-admin btn-admin-primary" id="adminSyncBtn">⇣ Run Sync</button>
+            <button class="btn-admin btn-admin-primary" id="adminSyncBtn">⇣ Sync</button>
           </div>
 
           <div class="admin-action" data-action="scan">
@@ -2159,11 +2205,14 @@ async function renderSystem() {
               <span class="admin-action-badge">Step 2</span>
             </div>
             <div class="admin-action-meta">
-              <div><b>What:</b> runs the Ultra scan over the entire universe (no limit by default). scanner-api orchestrates → market-data-api serves bars → engine-api scores 14 engines → candidates written to Postgres.</div>
-              <div><b>When:</b> after Sync, or any time you want fresh signals. Safe to re-run.</div>
-              <div><b>Why:</b> populates <code>ultra_scan_candidates</code> — the source of truth for everything you see on Ultra / Dashboard pages.</div>
+              <div><b>What:</b> reads cached 1d bars, runs 14 engines (Turbo / RTB / Z / L / …), scores candidates, writes to <code>ultra_scan_candidates</code>.</div>
+              <div><b>Bars used:</b> <code>1d · Massive · market_bars cache</code> — no direct Massive call during scan.</div>
+              <div><b>Needs token:</b> no — scan is public. Stop button available while running.</div>
             </div>
-            <button class="btn-admin btn-admin-primary" id="adminScanBtn">⚡ Run Scan</button>
+            <div style="display:flex;gap:8px;margin-top:auto">
+              <button class="btn-admin btn-admin-primary" id="adminScanBtn" style="flex:1">⚡ Run Scan</button>
+              <button class="btn-admin btn-admin-stop" id="adminStopBtn" disabled title="Stop the running scan">✕ Stop</button>
+            </div>
           </div>
 
           <div class="admin-action" data-action="generate">
@@ -2173,35 +2222,34 @@ async function renderSystem() {
               <span class="admin-action-badge">Step 3</span>
             </div>
             <div class="admin-action-meta">
-              <div><b>What:</b> generator-api reads the latest candidates and pre-aggregates 4 dashboard payloads: top_movers, best_setups, sector_heat, dashboard_summary.</div>
-              <div><b>When:</b> after Run Scan completes. Required for Dashboard page to show fresh data.</div>
-              <div><b>Why:</b> the Dashboard page reads these pre-aggregated views — not raw candidates — so it loads instantly regardless of universe size.</div>
+              <div><b>What:</b> generator-api aggregates the latest scan candidates into 4 dashboard views: top_movers · best_setups · sector_heat · dashboard_summary.</div>
+              <div><b>When:</b> after scan completes. Without this step Dashboard shows stale data.</div>
+              <div><b>Needs token:</b> yes — Generate writes to <code>scan_generated_views</code>.</div>
             </div>
-            <button class="btn-admin btn-admin-primary" id="adminGenBtn">▦ Generate Views</button>
+            <button class="btn-admin btn-admin-primary" id="adminGenBtn">▦ Generate</button>
           </div>
 
           <div class="admin-action admin-action-hero" data-action="pipeline">
             <div class="admin-action-head">
               <span class="admin-action-icon">▶</span>
               <span class="admin-action-title">Run Full Pipeline</span>
-              <span class="admin-action-badge admin-action-badge-hero">1+2+3</span>
+              <span class="admin-action-badge admin-action-badge-hero">1 + 2 + 3</span>
             </div>
             <div class="admin-action-meta">
-              <div><b>What:</b> chains Sync → Scan → Generate sequentially. Stops on first failure with a clear error.</div>
-              <div><b>When:</b> start-of-day, after deploying a code change, or whenever you want a clean end-to-end refresh.</div>
-              <div><b>Why:</b> one click to get from "fresh data needed" to "Dashboard + Ultra both updated". No manual sequencing.</div>
+              <div><b>Sync → Scan → Generate</b> sequentially. Uses universe + symbol count selected above. Stops on first failure and shows which step failed and why.</div>
+              <div><b>Needs token:</b> yes (for Sync and Generate steps). Token is never sent to third parties.</div>
             </div>
             <button class="btn-admin btn-admin-hero" id="adminPipeBtn">▶ Run Full Pipeline</button>
           </div>
         </div>
 
         <div class="admin-shortcuts">
-          <a class="btn-admin-link" href="#ultra" title="Open Ultra Scanner to view candidates / configure scan parameters per-run.">↗ Open Ultra Scanner</a>
-          <a class="btn-admin-link" href="#dashboard" title="Open the Dashboard page (reads the pre-aggregated generator-api views).">↗ Open Dashboard</a>
+          <a class="btn-admin-link" href="#ultra">↗ Open Ultra Scanner</a>
+          <a class="btn-admin-link" href="#dashboard">↗ Open Dashboard</a>
         </div>
 
         <div class="admin-status admin-status-rich" id="adminStatus">
-          <div class="admin-status-empty">Awaiting action. Pick a step above — each runs independently or chain them with Run Full Pipeline.</div>
+          <div class="admin-status-empty">Awaiting action. Select universe + symbol count above, then pick a step.</div>
         </div>
       </div>
 
@@ -2352,18 +2400,74 @@ async function renderSystem() {
   const tokInput = $("adminTokenInput");
   if (tokInput) {
     tokInput.value = localStorage.getItem("sachoki_admin_token") || "";
+    _updateTokenStatus();
     tokInput.addEventListener("input", () => {
-      localStorage.setItem("sachoki_admin_token", tokInput.value || "");
+      localStorage.setItem("sachoki_admin_token", tokInput.value.trim() || "");
+      _updateTokenStatus();
     });
   }
+
+  // Restore saved universe/count selections
+  const adminUniverse = $("adminUniverse");
+  const adminSymCount = $("adminSymCount");
+  const adminScoring  = $("adminScoring");
+  if (adminUniverse) adminUniverse.value = localStorage.getItem("sachoki_pipe_universe") || "sp500_sample";
+  if (adminSymCount) adminSymCount.value = localStorage.getItem("sachoki_pipe_count")    || "0";
+  if (adminScoring)  adminScoring.value  = localStorage.getItem("sachoki_pipe_scoring")  || "real";
+  if (adminUniverse) adminUniverse.addEventListener("change", () =>
+    localStorage.setItem("sachoki_pipe_universe", adminUniverse.value));
+  if (adminSymCount) adminSymCount.addEventListener("change", () =>
+    localStorage.setItem("sachoki_pipe_count", adminSymCount.value));
+  if (adminScoring)  adminScoring.addEventListener("change", () =>
+    localStorage.setItem("sachoki_pipe_scoring", adminScoring.value));
+
   const syncBtn = $("adminSyncBtn");
   if (syncBtn) syncBtn.addEventListener("click", () => _adminSyncMarketData());
   const scanBtn = $("adminScanBtn");
   if (scanBtn) scanBtn.addEventListener("click", () => _adminRunScanFromSystem());
-  const genBtn = $("adminGenBtn");
-  if (genBtn) genBtn.addEventListener("click", () => _adminGenerateViews());
+  const stopBtn = $("adminStopBtn");
+  if (stopBtn) stopBtn.addEventListener("click", () => _adminStopScan());
+  const genBtn  = $("adminGenBtn");
+  if (genBtn)  genBtn.addEventListener("click",  () => _adminGenerateViews());
   const pipeBtn = $("adminPipeBtn");
   if (pipeBtn) pipeBtn.addEventListener("click", () => _adminFullPipelineFromSystem());
+}
+
+function _updateTokenStatus() {
+  const el  = $("adminTokenStatus");
+  const tok = ($("adminTokenInput")?.value ?? "").trim();
+  if (!el) return;
+  if (!tok) {
+    el.innerHTML = `<span class="admin-tok-warn">⚠ Token empty — Sync &amp; Generate will fail</span>`;
+  } else {
+    el.innerHTML = `<span class="admin-tok-ok">✓ Token set (${tok.length} chars)</span>`;
+  }
+}
+
+async function _adminStopScan() {
+  const stopBtn = $("adminStopBtn");
+  if (stopBtn) stopBtn.disabled = true;
+  _setAdminStatus(_adminRichProgress({
+    phase: "scan", state: "warn",
+    title: "Stopping scan…",
+    detail: "Sending cancel request to scanner-api.",
+  }));
+  try {
+    const r = await fetch("/api/dashboard/scans/ultra/cancel", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+    const res = await r.json();
+    _setAdminStatus(_adminRichProgress({
+      phase: "scan", state: res.ok !== false ? "warn" : "error",
+      title: "Scan stop requested",
+      detail: esc(res.message || res.detail || "Scanner-api acknowledged the cancel request."),
+    }));
+  } catch (err) {
+    _setAdminStatus(_adminRichProgress({
+      phase: "scan", state: "error", title: "Stop request failed",
+      detail: esc(String(err)),
+    }));
+  }
+  _setAdminButtons(false);
 }
 
 // ── Page registry ─────────────────────────────────────────────────────────────

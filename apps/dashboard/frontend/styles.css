@@ -1445,3 +1445,52 @@ tbody tr:last-child { border-bottom: none; }
 /* ── Utility helpers ──────────────────────────────────────────────────────── */
 .pos { color: var(--pos); }
 .neg { color: var(--neg); }
+
+/* ── Admin panel: scan options row + token meta ───────────────────────────── */
+.admin-token-meta {
+  display: flex; flex-direction: column; gap: 4px;
+  flex: 1; min-width: 200px; padding-top: 22px;
+}
+.admin-token-status { font-size: .72rem; }
+.admin-tok-ok   { color: var(--pos); }
+.admin-tok-warn { color: var(--warn); }
+.admin-scan-opts {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.admin-scan-opt-label {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: .6rem; letter-spacing: .1em;
+  color: var(--tx-dim); text-transform: uppercase;
+}
+.admin-scan-opt-label select {
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  color: var(--tx-hi);
+  font-size: .78rem;
+  min-width: 160px;
+  cursor: pointer;
+}
+.admin-scan-opt-label select:focus { outline: none; border-color: var(--accent); }
+.admin-scan-opt-label select:disabled { opacity: .55; cursor: not-allowed; }
+
+/* Stop button */
+.btn-admin-stop {
+  background: rgba(240,79,79,.12);
+  color: var(--neg);
+  border: 1px solid rgba(240,79,79,.4);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+  font-size: .78rem; font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur-fast), filter var(--dur-fast);
+  white-space: nowrap;
+}
+.btn-admin-stop:hover:not(:disabled) {
+  background: rgba(240,79,79,.22);
+  filter: brightness(1.1);
+}
+.btn-admin-stop:disabled { opacity: .35; cursor: not-allowed; }
