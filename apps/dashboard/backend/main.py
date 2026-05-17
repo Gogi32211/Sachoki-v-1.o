@@ -59,6 +59,7 @@ _CHART_MAX_BARS   = 250
 _PATH_TO_ENDPOINT: dict[str, str] = {
     "/health":                                 "scanner_health",
     "/version":                                "scanner_version",
+    "/api/debug/status":                       "scanner_debug_status",
     "/api/chart/signals":                      "scanner_signals",
     "/api/chart/candles":                      "chart_candles",
     "/api/chart/score":                        "chart_score",
@@ -94,8 +95,17 @@ def _resolve(path: str) -> str:
 def _scanner_get(path: str, params: dict | None = None) -> tuple[dict | None, str | None]:
     """Legacy wrapper — returns (data, error_string) to keep existing
     call sites untouched. New code should use _scanner_call() for the
-    structured UpstreamError shape."""
-    data, err = scanner.call(_resolve(path), params=params)
+    structured UpstreamError shape.
+
+    Unregistered paths used to raise KeyError, which surfaced as HTTP 500
+    from the caller's route handler. Now treated as a soft failure so
+    one missing registration entry doesn't take down /api/debug/status."""
+    try:
+        endpoint = _resolve(path)
+    except KeyError as exc:
+        log.warning("_scanner_get: %s", exc)
+        return None, f"path not registered: {path}"
+    data, err = scanner.call(endpoint, params=params)
     return data, (err.message if err else None)
 
 
@@ -107,7 +117,12 @@ def _chart_get(path: str, params: dict | None = None) -> tuple[dict | None, str 
 
 def _scanner_post(path: str, body: dict | None = None) -> tuple[dict | None, str | None]:
     """Legacy POST wrapper — see _scanner_get."""
-    data, err = scanner.call(_resolve(path), body=body)
+    try:
+        endpoint = _resolve(path)
+    except KeyError as exc:
+        log.warning("_scanner_post: %s", exc)
+        return None, f"path not registered: {path}"
+    data, err = scanner.call(endpoint, body=body)
     return data, (err.message if err else None)
 
 

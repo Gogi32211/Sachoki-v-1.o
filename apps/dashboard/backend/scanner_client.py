@@ -76,6 +76,10 @@ ENDPOINTS: dict[str, Endpoint] = {
     "scanner_health":      Endpoint("scanner_health",      "scanner", "GET",  "/health",                              timeout=3),
     "scanner_version":     Endpoint("scanner_version",     "scanner", "GET",  "/version",                             timeout=3),
     "scanner_signals":     Endpoint("scanner_signals",     "scanner", "GET",  "/api/chart/signals",                   timeout=5),
+    # Phase B-2 follow-up: full debug/status from scanner-api (returns
+    # engine_api_* probe results). Lighter timeout — the engine-api probe
+    # itself uses 5s, so 8s caps total at slightly above that.
+    "scanner_debug_status":Endpoint("scanner_debug_status","scanner", "GET",  "/api/debug/status",                    timeout=8),
 
     # ── Sample lists / split universe ────────────────────────────────────────
     "sample_lists":        Endpoint("sample_lists",        "scanner", "GET",  "/api/scans/ultra/sample-lists",        timeout=10),
