@@ -14,7 +14,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Header, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -668,6 +668,31 @@ def scan_split_universe():
     Frontend calls this lazily in the background after sample-lists loads
     if `split_cache_warm=false`; sample-lists itself never blocks on NASDAQ."""
     data, err = _scanner_call("split_universe")
+    if err is not None:
+        return _err_response(err)
+    data["source"] = "dashboard-bff"
+    return data
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin Control Center proxy endpoints (Phase C-2)
+# Forward the x-admin-token header from frontend to scanner-api unchanged.
+# BFF NEVER stores or validates the token — only relays.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/api/dashboard/admin/sync-market-data")
+async def admin_sync_market_data(request: Request,
+                                  x_admin_token: str = Header(default="")):
+    """
+    Sync Market Data button. Forwards body + x-admin-token to scanner-api.
+    Pre-warms market_bars cache so subsequent scans skip Massive.
+    """
+    body = await request.json() if request.headers.get("content-length") else {}
+    data, err = scanner.call(
+        "admin_sync_market_data",
+        body=body,
+        headers={"x-admin-token": x_admin_token},
+    )
     if err is not None:
         return _err_response(err)
     data["source"] = "dashboard-bff"

@@ -355,6 +355,71 @@ function _warmSplitUniverseInBackground() {
     .catch(() => { /* ignore — split is optional */ });
 }
 
+// ── Admin Control Center actions ──────────────────────────────────────────
+function _adminStatusEl()    { return $("adminStatus"); }
+function _adminToken()       { return ($("adminTokenInput")?.value ?? "").trim(); }
+function _setAdminStatus(html, cls = "") {
+  const el = _adminStatusEl();
+  if (!el) return;
+  el.className = "admin-status " + cls;
+  el.innerHTML = html;
+}
+function _setAdminButtons(disabled) {
+  for (const id of ["adminSyncBtn", "adminScanBtn", "adminPipeBtn"]) {
+    const b = $(id); if (b) b.disabled = disabled;
+  }
+}
+
+async function _adminSyncMarketData(opts) {
+  const token = _adminToken();
+  if (!token) {
+    _setAdminStatus("⚠ Paste ADMIN_TOKEN above first.", "admin-warn");
+    return { ok: false, error: "no_token" };
+  }
+  _setAdminStatus("⇣ Syncing market data… (this can take a while; first cold pull hits Massive for every symbol)", "admin-running");
+  _setAdminButtons(true);
+  try {
+    const resp = await fetch("/api/dashboard/admin/sync-market-data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-admin-token": token },
+      body: JSON.stringify(opts?.body ?? {}),
+    });
+    const result = await resp.json();
+    if (!resp.ok) {
+      _setAdminStatus(`✕ Sync failed (HTTP ${resp.status}): ${esc(result.error || result.detail || "")}`, "admin-error");
+      return { ok: false, error: result.error || `HTTP ${resp.status}` };
+    }
+    const sent  = result.synced_from_massive ?? 0;
+    const cache = result.cache_hit ?? 0;
+    const fail  = result.failed ?? 0;
+    const rows  = result.rows_written ?? 0;
+    _setAdminStatus(
+      `✓ Sync complete · <b>${sent}</b> fetched from Massive · <b>${cache}</b> cache hits · <b>${rows}</b> bars written · ${fail} failed`,
+      "admin-ok"
+    );
+    return { ok: true, result };
+  } catch (err) {
+    _setAdminStatus(`✕ Sync error: ${esc(String(err))}`, "admin-error");
+    return { ok: false, error: String(err) };
+  } finally {
+    _setAdminButtons(false);
+  }
+}
+
+async function _adminFullPipeline() {
+  // Sync → Run Scan. Generate Views is Phase E placeholder.
+  if (!_adminToken()) {
+    _setAdminStatus("⚠ Paste ADMIN_TOKEN above first.", "admin-warn");
+    return;
+  }
+  _setAdminStatus("▶ Step 1/2: Sync Market Data…", "admin-running");
+  const sync = await _adminSyncMarketData();
+  if (!sync.ok) return;  // syncMarketData already set the error message
+  _setAdminStatus(_adminStatusEl().innerHTML + "<br>▶ Step 2/2: Run Scan…", "admin-running");
+  await runScan();  // existing flow; its own progress card takes over
+  // Don't overwrite admin status — the scan progress UI shows running state.
+}
+
 async function runScan() {
   if (_scanRunning) return;
   const universe    = $("scUniverse")?.value   ?? "sp500_sample";
@@ -683,6 +748,24 @@ async function renderUltra() {
         <div class="card"><div class="c-label">Finished</div><div class="c-value" style="font-size:.7rem;padding-top:4px">${fmtDate(scan.finished_at)}</div></div>
       </div>
 
+      <div class="section-label">Admin Control Center</div>
+      <div class="admin-card" id="adminControls">
+        <div class="admin-row">
+          <button class="btn-admin"      id="adminSyncBtn"   title="Sync OHLCV from Massive into market_bars cache. Subsequent scans skip Massive.">⇣ Sync Market Data</button>
+          <button class="btn-admin"      id="adminScanBtn"   title="Run a controlled scan (uses the cache). Same as Run Scan below.">⚡ Run Scan</button>
+          <button class="btn-admin btn-admin-disabled" id="adminGenBtn" disabled title="Generate dashboard-ready views (top_movers / best_setups / sector_heat). Lands in Phase E.">▦ Generate Views <span class="soon-tag">soon</span></button>
+          <button class="btn-admin btn-admin-pipe" id="adminPipeBtn" title="Sync → Scan in one click.">▶ Run Full Pipeline</button>
+        </div>
+        <div class="admin-row admin-token-row">
+          <label class="admin-token-label">
+            <span>x-admin-token</span>
+            <input type="password" id="adminTokenInput" placeholder="paste ADMIN_TOKEN" autocomplete="off" />
+          </label>
+          <span class="admin-token-hint">Stored in this browser only (localStorage). Required for Sync &amp; Full Pipeline.</span>
+        </div>
+        <div class="admin-status" id="adminStatus"></div>
+      </div>
+
       <div class="section-label">Ultra Scan Controls</div>
       <div class="scan-controls-card" id="scanControls">
         <div class="scan-safety-row">
@@ -877,6 +960,21 @@ async function renderUltra() {
   if (expBtn) expBtn.addEventListener("click", _exportUltraCSV);
   const dbgBtn = $("debugPanelBtn");
   if (dbgBtn) dbgBtn.addEventListener("click", _toggleUltraDebug);
+
+  // ── Admin Control Center wiring ──────────────────────────────────────────
+  const tokInput = $("adminTokenInput");
+  if (tokInput) {
+    tokInput.value = localStorage.getItem("sachoki_admin_token") || "";
+    tokInput.addEventListener("input", () => {
+      localStorage.setItem("sachoki_admin_token", tokInput.value || "");
+    });
+  }
+  const syncBtn = $("adminSyncBtn");
+  if (syncBtn) syncBtn.addEventListener("click", () => _adminSyncMarketData());
+  const adminScanBtn = $("adminScanBtn");
+  if (adminScanBtn) adminScanBtn.addEventListener("click", () => runScan());
+  const pipeBtn = $("adminPipeBtn");
+  if (pipeBtn) pipeBtn.addEventListener("click", () => _adminFullPipeline());
 
   // Restore running state if scan was in progress before navigation
   if (_scanRunning) {

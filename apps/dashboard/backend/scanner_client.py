@@ -95,6 +95,13 @@ ENDPOINTS: dict[str, Endpoint] = {
     "scan_latest_candidates": Endpoint("scan_latest_candidates",
                                                           "scanner", "GET",  "/api/scans/ultra/latest/candidates",   timeout=10),
 
+    # ── Admin ────────────────────────────────────────────────────────────────
+    # market-data sync can be long-running (N symbols × Massive HTTP). Cap at
+    # 120s here; the upstream itself can take longer but the client should
+    # not block — better to give up the ack and let the UI poll.
+    "admin_sync_market_data": Endpoint("admin_sync_market_data",
+                                                          "scanner", "POST", "/api/admin/sync-market-data",          timeout=120, kind="ack"),
+
     # ── Chart endpoints (hit Massive via scanner-api) ────────────────────────
     "chart_candles":       Endpoint("chart_candles",       "scanner", "GET",  "/api/chart/candles",                   timeout=15),
     "chart_score":         Endpoint("chart_score",         "scanner", "GET",  "/api/chart/score",                     timeout=10),
@@ -114,8 +121,9 @@ def _service_url(service: str) -> str:
 def call(
     name: str,
     *,
-    params: Mapping[str, Any] | None = None,
-    body:   Mapping[str, Any] | None = None,
+    params:  Mapping[str, Any] | None = None,
+    body:    Mapping[str, Any] | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> tuple[dict | None, UpstreamError | None]:
     """
     Invoke a registered upstream endpoint. Never raises.
@@ -143,12 +151,15 @@ def call(
     url = f"{base}{ep.path}"
     last_err: UpstreamError | None = None
 
+    hdrs = dict(headers or {})
     for attempt in range(ep.retries + 1):
         try:
             if ep.method == "GET":
-                resp = httpx.get(url, params=dict(params or {}), timeout=ep.timeout)
+                resp = httpx.get(url, params=dict(params or {}),
+                                 headers=hdrs or None, timeout=ep.timeout)
             elif ep.method == "POST":
-                resp = httpx.post(url, json=dict(body or {}), timeout=ep.timeout)
+                resp = httpx.post(url, json=dict(body or {}),
+                                  headers=hdrs or None, timeout=ep.timeout)
             else:
                 return None, UpstreamError(UpstreamErrorCode.UNKNOWN, f"unsupported method {ep.method}")
             resp.raise_for_status()

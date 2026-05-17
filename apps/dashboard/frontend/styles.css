@@ -623,6 +623,79 @@ tbody tr:last-child { border-bottom: none; }
 .beta-zone-short-watch { color: var(--c-red-400); }
 .beta-zone-neutral     { color: var(--text-muted); }
 
+/* ── Admin Control Center (Phase C-2) ─────────────────────────────────── */
+.admin-card {
+  background: var(--surface);
+  border: 1px solid var(--border-accent, #1f6feb);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 10px;
+  margin-bottom: 4px;
+}
+.admin-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn-admin {
+  background: var(--surface-elevated, #1c2128);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius);
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out);
+}
+.btn-admin:hover:not(:disabled) {
+  background: var(--surface-overlay);
+  border-color: var(--c-accent, #1f6feb);
+}
+.btn-admin:disabled, .btn-admin-disabled {
+  opacity: 0.5; cursor: not-allowed;
+}
+.btn-admin-pipe {
+  background: var(--c-accent, #1f6feb);
+  border-color: var(--c-accent, #1f6feb);
+  color: white;
+}
+.btn-admin-pipe:hover:not(:disabled) { filter: brightness(1.1); }
+.soon-tag {
+  font-size: 0.6rem;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--c-amber-900);
+  color: var(--c-amber-300);
+  margin-left: 4px;
+  font-weight: 700;
+}
+.admin-token-row { gap: 12px; }
+.admin-token-label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.75rem; color: var(--text-muted);
+}
+.admin-token-label input {
+  background: var(--surface-base);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  width: 280px;
+}
+.admin-token-hint {
+  font-size: 0.7rem; color: var(--text-dim);
+}
+.admin-status {
+  font-size: 0.8rem;
+  padding: 6px 0 0;
+  font-family: var(--font-mono);
+  min-height: 18px;
+}
+.admin-status.admin-ok      { color: var(--c-pos); }
+.admin-status.admin-error   { color: var(--c-neg); }
+.admin-status.admin-warn    { color: var(--c-warn); }
+.admin-status.admin-running { color: var(--c-info); }
+
 /* Ultra debug panel */
 .ultra-debug-panel {
   margin: 6px 12px 12px; padding: 10px 12px;
