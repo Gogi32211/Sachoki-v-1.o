@@ -1950,6 +1950,95 @@ async function renderSystem() {
         <div class="card"><div class="c-label">Massive API</div><div class="c-value" style="font-size:1rem;color:${status.massive_configured ? "var(--green)" : "var(--text-dim)"}">${status.massive_configured ? "yes" : "no"}</div></div>
         <div class="card"><div class="c-label">Research API</div><div class="c-value" style="font-size:1rem;color:${status.research_api_url_configured ? "var(--green)" : "var(--text-dim)"}">${status.research_api_url_configured ? "yes" : "no"}</div></div>
       </div>
+      <div class="section-label">Architecture Flow</div>
+      <div class="arch-flow">
+        <div class="arch-legend">
+          Six-service split (Phase E complete). Each box is a standalone Railway deployable.
+          Arrows show request direction. Pills show whether scanner-api is talking to each
+          service over HTTP (extracted, green) or still in-process fallback (yellow).
+        </div>
+
+        <div class="arch-row">
+          <div class="arch-node arch-user">
+            <div class="arch-title">👤 User / Browser</div>
+            <div class="arch-desc">Operator opens dashboard, clicks Run Scan / Generate Views, views Ultra page.</div>
+          </div>
+        </div>
+        <div class="arch-arrow">↓ HTTPS</div>
+
+        <div class="arch-row">
+          <div class="arch-node arch-frontend">
+            <div class="arch-title">🖥️ dashboard <span class="arch-pill ok">live</span></div>
+            <div class="arch-desc">FastAPI BFF + static frontend. No business logic — pure passthrough + UI. Owns nothing in DB. <code>apps/dashboard</code></div>
+          </div>
+        </div>
+        <div class="arch-arrow">↓ HTTP (BFF → upstream)</div>
+
+        <div class="arch-row">
+          <div class="arch-node arch-scanner">
+            <div class="arch-title">🛰️ scanner-api <span class="arch-pill ${reach ? "ok" : "err"}">${reach ? "reachable" : "down"}</span></div>
+            <div class="arch-desc">Orchestrator. Runs the scan pipeline, owns <code>ultra_scan_runs</code> + <code>ultra_scan_candidates</code> tables. Calls the 3 services below over HTTP. <code>apps/scanner-api</code></div>
+          </div>
+        </div>
+        <div class="arch-arrow">↓ fan-out (3 services in pipeline order)</div>
+
+        <div class="arch-row arch-fanout">
+          <div class="arch-node arch-md">
+            <div class="arch-title">📈 market-data-api
+              <span class="arch-pill ${status.market_data_api_url_configured ? (status.market_data_api_reachable ? "ok" : "err") : "warn"}">
+                ${status.market_data_api_url_configured ? (status.market_data_api_reachable ? "HTTP" : "down") : "in-process"}
+              </span>
+            </div>
+            <div class="arch-desc">Pulls OHLCV bars from Massive, caches in <code>market_bars</code>. Owns split-universe cache. Step 1 of pipeline. <code>apps/market-data-api</code></div>
+          </div>
+          <div class="arch-node arch-engine">
+            <div class="arch-title">⚙️ engine-api
+              <span class="arch-pill ${status.engine_api_url_configured ? (status.engine_api_reachable ? "ok" : "err") : "warn"}">
+                ${status.engine_api_url_configured ? (status.engine_api_reachable ? "HTTP" : "down") : "in-process"}
+              </span>
+            </div>
+            <div class="arch-desc">Pure compute. Runs 14 engines (Turbo, RTB, momentum, etc.) on bars from market-data-api, returns scored signals. No DB, no external HTTP. Step 2. <code>apps/engine-api</code></div>
+          </div>
+          <div class="arch-node arch-gen">
+            <div class="arch-title">📊 generator-api
+              <span class="arch-pill ${status.generator_api_url_configured ? (status.generator_api_reachable ? "ok" : "err") : "warn"}">
+                ${status.generator_api_url_configured ? (status.generator_api_reachable ? "HTTP" : "down") : "in-process"}
+              </span>
+            </div>
+            <div class="arch-desc">Pre-aggregates dashboard views (top_movers / best_setups / sector_heat / summary). Owns <code>scan_generated_views</code>. Step 3 — runs after candidates are written. <code>apps/generator-api</code></div>
+          </div>
+        </div>
+        <div class="arch-arrow">↓ persist / read</div>
+
+        <div class="arch-row arch-fanout-2">
+          <div class="arch-node arch-db">
+            <div class="arch-title">🗄️ Postgres (shared)</div>
+            <div class="arch-desc">Single shared cluster. Each service owns specific tables — no cross-writes.<br>
+              <span style="color:var(--text-dim)">market-data-api → <code>market_bars</code>; scanner-api → <code>ultra_scan_*</code>; generator-api → <code>scan_generated_views</code></span>
+            </div>
+          </div>
+          <div class="arch-node arch-ext">
+            <div class="arch-title">🌐 Massive HTTP (external)</div>
+            <div class="arch-desc">Only market-data-api calls Massive. All other services read bars from cache, never touch the external vendor directly.</div>
+          </div>
+          <div class="arch-node arch-research">
+            <div class="arch-title">🔬 research-api <span class="arch-pill warn">skeleton</span></div>
+            <div class="arch-desc">Stub for future news / AI / catalysts. Not extracted yet — last service in the 6-service target.</div>
+          </div>
+        </div>
+
+        <div class="arch-legend" style="margin-top:14px">
+          <strong>Pipeline order for a scan:</strong>
+          1) scanner-api receives Run Scan →
+          2) per-ticker fetch via market-data-api (warm cache or pull Massive) →
+          3) engine-api computes 14-engine scores →
+          4) scanner-api writes candidates →
+          5) generator-api builds the 4 dashboard views.
+          Each arrow above is a real HTTP call (or in-process fallback if the
+          corresponding <code>*_API_URL</code> env var is unset on scanner-api).
+        </div>
+      </div>
+
       <div class="section-label">Safety Flags</div>
       <div class="cards-row">
         <div class="card"><div class="c-label">Scheduler</div><div class="c-value" style="font-size:.9rem;color:var(--text-dim)">disabled</div></div>

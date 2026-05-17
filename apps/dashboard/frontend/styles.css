@@ -155,6 +155,85 @@ a { color: var(--blue); text-decoration: none; }
 .card .c-value { font-size: 1.5rem; font-weight: 700; color: var(--text-hi); line-height: 1.1; }
 .card .c-sub   { font-size: .68rem; color: var(--text-dim); margin-top: 3px; }
 
+/* ── Architecture flow diagram (System page) ──────────────────────────────── */
+.arch-flow {
+  display: flex; flex-direction: column; align-items: stretch;
+  gap: 6px;
+  padding: 16px;
+  background: var(--bg-sub, #0d1117);
+  border: 1px solid var(--border, #21262d);
+  border-radius: 8px;
+}
+.arch-legend {
+  font-size: .72rem; line-height: 1.5;
+  color: var(--text-dim);
+  padding: 6px 4px;
+}
+.arch-legend code {
+  background: #161b22; padding: 1px 5px; border-radius: 3px;
+  font-size: .68rem; color: var(--text-hi);
+}
+.arch-legend strong { color: var(--text-hi); }
+.arch-row {
+  display: flex; justify-content: center;
+}
+.arch-fanout, .arch-fanout-2 {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+}
+.arch-node {
+  flex: 1 1 0;
+  background: #161b22;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 6px;
+  padding: 10px 12px;
+  min-width: 0;
+  max-width: 520px;
+}
+.arch-row:not(.arch-fanout):not(.arch-fanout-2) .arch-node { max-width: 560px; }
+.arch-node .arch-title {
+  font-size: .82rem; font-weight: 700; color: var(--text-hi);
+  margin-bottom: 4px;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.arch-node .arch-desc {
+  font-size: .68rem; line-height: 1.45;
+  color: var(--text-dim);
+}
+.arch-node .arch-desc code {
+  background: #0d1117; padding: 1px 4px; border-radius: 3px;
+  font-size: .65rem; color: var(--text-hi);
+}
+.arch-arrow {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: .7rem;
+  letter-spacing: .04em;
+  padding: 2px 0;
+}
+.arch-pill {
+  display: inline-flex; align-items: center;
+  font-size: .58rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .05em;
+  padding: 1px 6px; border-radius: 10px;
+  border: 1px solid;
+}
+.arch-pill.ok   { color: var(--green);  border-color: #238636; background: #0d1f1a; }
+.arch-pill.warn { color: var(--yellow); border-color: #9e6a03; background: #1c1407; }
+.arch-pill.err  { color: var(--red);    border-color: #6e1a1a; background: #1c0a0a; }
+.arch-frontend  { border-left: 3px solid var(--blue, #1f6feb); }
+.arch-scanner   { border-left: 3px solid #d29922; }
+.arch-md        { border-left: 3px solid #2da44e; }
+.arch-engine    { border-left: 3px solid #8957e5; }
+.arch-gen       { border-left: 3px solid #1f6feb; }
+.arch-db        { border-left: 3px solid #6e7681; }
+.arch-ext       { border-left: 3px solid #cf222e; }
+.arch-research  { border-left: 3px solid #6e7681; opacity: .7; }
+.arch-user      { border-left: 3px solid #6e7681; }
+
+@media (max-width: 760px) {
+  .arch-fanout, .arch-fanout-2 { grid-template-columns: 1fr; }
+}
+
 /* ── Quick-access grid ────────────────────────────────────────────────────── */
 .quick-grid {
   display: grid;
