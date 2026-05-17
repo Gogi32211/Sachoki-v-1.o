@@ -1079,22 +1079,24 @@ async function renderUltra() {
         </div>
         <div class="scan-form-row">
           <label class="scan-label">Universe
-            <select id="scUniverse">
-              <option value="sp500_sample">S&amp;P 500 Sample</option>
-              <option value="nasdaq_sample">NASDAQ Sample</option>
+            <select id="scUniverse" title="Which symbol pool to draw from. Sample lists = 100 curated tickers. Split Universe = full NASDAQ reverse-split history, usually 500–2000+ tickers. Pick this for a real big scan.">
+              <option value="sp500_sample">S&amp;P 500 Sample (~100)</option>
+              <option value="nasdaq_sample">NASDAQ Sample (~100)</option>
+              <option value="split_universe">Split Universe (500–2000+)</option>
               <option value="manual_default">Manual List</option>
             </select>
           </label>
           <label class="scan-label">Symbols
-            <select id="scCount" title="Number of symbols from the universe. MAX = no cap (entire universe). SCANNER_MAX_SYMBOLS=0 → no upstream limit.">
+            <select id="scCount" title="How many tickers to take from the chosen universe. MAX = entire universe (size depends on which one you picked). SCANNER_MAX_SYMBOLS=0 = no upstream cap.">
               <option value="10">10</option>
               <option value="25">25</option>
               <option value="50">50</option>
-              <option value="100">100</option>
+              <option value="100">100 (max for sample lists)</option>
               <option value="250">250</option>
               <option value="500">500</option>
               <option value="1000">1000</option>
-              <option value="0" selected>MAX (no limit)</option>
+              <option value="2000">2000</option>
+              <option value="0" selected>MAX (entire universe)</option>
             </select>
           </label>
           <label class="scan-label">Scoring

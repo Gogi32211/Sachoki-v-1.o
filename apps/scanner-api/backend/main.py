@@ -42,6 +42,10 @@ _ALLOWED_TIMEFRAMES = ["1d"]
 _ALLOWED_UNIVERSES  = {
     "manual_test", "sp500_sample", "nasdaq_sample",
     "watchlist_sample", "custom_sample",
+    # Large universe (NASDAQ reverse-split history, typically 500–2000+
+    # tickers). Resolves via the split_universe cache. Use this with
+    # symbol_count=0 / MAX to actually fill the database from a big list.
+    "split_universe",
 }
 _SCHEDULER_ENABLED  = False
 

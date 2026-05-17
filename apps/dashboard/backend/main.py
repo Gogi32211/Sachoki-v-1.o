@@ -788,6 +788,10 @@ _UNIVERSE_MAP: dict[str, str] = {
     "sp500_sample":   "sp500_sample",
     "nasdaq_sample":  "nasdaq_sample",
     "manual_default": "manual_default",
+    # Reverse-split NASDAQ universe — much bigger (500–2000+ tickers).
+    # Empty if split cache is cold; frontend can warm it via
+    # /api/dashboard/scans/ultra/split-universe.
+    "split_universe": "split_universe",
 }
 
 _VALID_UNIVERSES = set(_UNIVERSE_MAP.keys())
