@@ -1,12 +1,15 @@
 """
-split_universe.py — Phase 8G commit 4: port of root backend/split_universe.py.
+split_universe.py — Phase F-1: Massive is the sole data source.
 
 Reverse-stock-split universe + lifecycle + stock-only filter.
-Verbatim port — formulas unchanged. Only import paths differ.
+Lifecycle math and stock-only filter unchanged. The fetch backend
+switched from NASDAQ's per-date calendar endpoint (104 HTTP) to
+Massive's /v3/reference/splits (1–2 paginated requests).
 
-The NASDAQ splits API is the data source. Network errors degrade silently
-(per-date requests skipped). 6-hour in-memory cache. No CSV side-effect
-(write_canonical_csv is omitted — can be re-added if a consumer needs it).
+This file is the in-process fallback used when MARKET_DATA_API_URL
+is unset; market-data-api holds the canonical copy.
+
+Network errors fall back to stale cache. 6-hour in-memory cache.
 
 Provides:
   split_service                 — module-level singleton (lazy fetch on first use)
@@ -19,11 +22,8 @@ Provides:
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
-import urllib.request
-import urllib.error
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, date as date_t
 from typing import Dict, List, Optional, Tuple
@@ -212,14 +212,8 @@ class SplitUniverseResult:
 class SplitUniverseService:
     CACHE_DURATION_HOURS = 6
     MIN_RATIO            = 2.0
-    # Per-request HTTP timeout when looping NASDAQ. Original code used 10s;
-    # drop to 3s so even total cold-fetch (105 dates × 3s ≈ 5min worst case)
-    # is bounded — but normally each request completes in <500ms when NASDAQ
-    # is reachable. If NASDAQ is unreachable in this environment, every
-    # request fails fast and we return 0 events.
-    HTTP_TIMEOUT_SEC = 3
     # In-flight refresh guard. Prevents two simultaneous refreshers (e.g.
-    # frontend polling + manual refresh) from each spinning up a NASDAQ loop.
+    # frontend polling + manual refresh) from each spinning up a Massive call.
     _refresh_in_flight: bool = False
 
     def __init__(self) -> None:
@@ -255,7 +249,7 @@ class SplitUniverseService:
 
     def _do_refresh(self) -> SplitUniverseResult:
         today_dt = datetime.now().date()
-        raw = self._fetch_nasdaq_splits()
+        raw = self._fetch_massive_splits()
 
         stock_rows: List[dict] = []
         excluded_n = 0
@@ -305,59 +299,31 @@ class SplitUniverseService:
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
-    def _fetch_nasdaq_splits(self) -> List[dict]:
-        url   = "https://api.nasdaq.com/api/calendar/splits"
-        today = datetime.now()
-        out:  List[dict] = []
-        for offset in range(-SPLIT_HISTORY_DAYS, SPLIT_FUTURE_DAYS + 1):
-            date_str = (today + timedelta(days=offset)).strftime("%Y-%m-%d")
-            try:
-                req = urllib.request.Request(
-                    f"{url}?date={date_str}",
-                    headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
-                )
-                with urllib.request.urlopen(req, timeout=self.HTTP_TIMEOUT_SEC) as resp:
-                    data = json.load(resp)
-            except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
-                log.debug("split fetch %s skipped: %s", date_str, exc)
-                continue
-            except Exception as exc:
-                log.warning("split fetch %s error: %s", date_str, exc)
-                continue
+    def _fetch_massive_splits(self) -> List[dict]:
+        """
+        Pull reverse-split events from Massive /v3/reference/splits via the
+        in-process scan_engine helper. One paginated request replaces the
+        legacy NASDAQ per-date loop.
 
-            rows = (data.get("data") or {}).get("rows") or []
-            for row in rows:
-                ratio_str = row.get("ratio") or ""
-                ratio     = self._parse_ratio(ratio_str)
-                ticker    = normalize_split_symbol(row.get("symbol") or "")
-                if not ticker or ratio is None:
-                    continue
-                out.append({
-                    "ticker":       ticker,
-                    "split_date":   date_str,
-                    "ratio":        ratio,
-                    "ratio_str":    ratio_str,
-                    "source":       "nasdaq",
-                    "companyName":  row.get("companyName") or row.get("name") or "",
-                    "securityName": row.get("securityName") or "",
-                    "assetType":    row.get("assetType") or "",
-                    "issueType":    row.get("issueType") or "",
-                })
-        return out
-
-    @staticmethod
-    def _parse_ratio(ratio_str: str) -> Optional[float]:
-        if not ratio_str:
-            return None
-        s = ratio_str.replace("-for-", ":").replace("/", ":").replace(" ", "")
-        if ":" in s:
-            try:
-                a, b = s.split(":", 1)
-                af, bf = float(a), float(b)
-                return bf / af if af > 0 else None
-            except (ValueError, ZeroDivisionError):
-                return None
-        return None
+        On any transport / auth error, returns []. Caller falls back to
+        stale cache (if any) or surfaces an empty universe.
+        """
+        try:
+            from .scan_engine import fetch_splits as _fetch
+        except Exception as exc:
+            log.warning("scan_engine.fetch_splits import failed: %s", exc)
+            return []
+        rows = _fetch(
+            history_days = SPLIT_HISTORY_DAYS,
+            future_days  = SPLIT_FUTURE_DAYS,
+            min_ratio    = self.MIN_RATIO,
+        )
+        if rows is None:
+            log.warning("scan_engine.fetch_splits returned None — empty universe")
+            return []
+        for r in rows:
+            r["ticker"] = normalize_split_symbol(r.get("ticker") or "")
+        return [r for r in rows if r["ticker"]]
 
     @staticmethod
     def _dedupe_by_ticker(results: List[dict]) -> List[dict]:

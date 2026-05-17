@@ -119,6 +119,105 @@ def fetch_bars(symbol: str, interval: str = "1d", days: int = 180) -> pd.DataFra
     return df
 
 
+# ── Splits fetch (Massive — Phase F-1) ────────────────────────────────────────
+
+def fetch_splits(
+    history_days: int = 90,
+    future_days:  int = 14,
+    min_ratio:    float = 2.0,
+) -> list[dict] | None:
+    """
+    Fetch reverse-stock-split events from Massive /v3/reference/splits.
+
+    Replaces the legacy NASDAQ 100-HTTP loop with a single paginated call.
+    Same shape as market-data-api's fetch_splits — duplicated here so
+    scanner-api's in-process split_universe fallback doesn't need
+    market-data-api running locally.
+
+    Returns:
+      list[dict]  on success (possibly empty)
+      None        on transport / auth error
+    """
+    try:
+        key = _massive_key()
+    except EnvironmentError as exc:
+        log.warning("fetch_splits: %s", exc)
+        return None
+
+    now = datetime.now(timezone.utc).date()
+    frm = (now - timedelta(days=history_days)).isoformat()
+    to  = (now + timedelta(days=future_days)).isoformat()
+    url = f"{_MASSIVE_BASE}/v3/reference/splits"
+    params = {
+        "execution_date.gte": frm,
+        "execution_date.lte": to,
+        "reverse_split":      "true",
+        "limit":              1000,
+        "order":              "desc",
+        "sort":               "execution_date",
+        "apiKey":             key,
+    }
+
+    out: list[dict] = []
+    pages = 0
+    next_url: str | None = url
+    while next_url and pages < 10:
+        pages += 1
+        for attempt in range(3):
+            try:
+                r = requests.get(next_url, params=params if pages == 1 else None,
+                                 timeout=(5, 15))
+                if r.status_code == 429:
+                    time.sleep(1 * (attempt + 1))
+                    continue
+                r.raise_for_status()
+                data = r.json()
+                break
+            except requests.RequestException as exc:
+                if attempt == 2:
+                    log.warning("fetch_splits: max retries (page %d): %s", pages, exc)
+                    return None if not out else out
+                time.sleep(2 ** attempt)
+        else:
+            return None if not out else out
+
+        for row in data.get("results") or []:
+            try:
+                sf = float(row.get("split_from") or 0)
+                st = float(row.get("split_to")   or 0)
+            except (TypeError, ValueError):
+                continue
+            if sf <= 0 or st <= 0:
+                continue
+            ratio = sf / st if st > 0 else 0
+            if ratio < min_ratio:
+                continue
+            ticker     = (row.get("ticker") or "").upper().strip()
+            split_date = row.get("execution_date") or ""
+            if not ticker or not split_date:
+                continue
+            out.append({
+                "ticker":       ticker,
+                "split_date":   split_date,
+                "ratio":        ratio,
+                "ratio_str":    f"{int(sf)}:{int(st)}" if sf == int(sf) and st == int(st)
+                                else f"{sf:g}:{st:g}",
+                "source":       "massive",
+                "companyName":  "",
+                "securityName": "",
+                "assetType":    "",
+                "issueType":    "",
+            })
+
+        next_url = data.get("next_url")
+        if next_url and "apiKey=" not in next_url:
+            next_url = f"{next_url}&apiKey={key}"
+
+    log.info("fetch_splits: %d events (%d pages, window=%s..%s)",
+             len(out), pages, frm, to)
+    return out
+
+
 # ── Signal computation ────────────────────────────────────────────────────────
 
 def compute_signals(df: pd.DataFrame) -> dict:
