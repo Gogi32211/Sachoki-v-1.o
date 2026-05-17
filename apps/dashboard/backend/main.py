@@ -798,9 +798,12 @@ _UNIVERSE_MAP: dict[str, str] = {
     "nasdaq_sample":  "nasdaq_sample",
     "manual_default": "manual_default",
     # Reverse-split NASDAQ universe — much bigger (500–2000+ tickers).
-    # Empty if split cache is cold; frontend can warm it via
-    # /api/dashboard/scans/ultra/split-universe.
     "split_universe": "split_universe",
+    # Phase F-2: full live universes via Massive /v3/reference/tickers.
+    # Empty if cache is cold; frontend warms via /universe/{key}.
+    "nasdaq_full":     "nasdaq_full",       # ~3000 NASDAQ Common Stocks
+    "nyse_full":       "nyse_full",         # ~2500 NYSE Common Stocks
+    "us_stocks_full":  "us_stocks_full",    # ~5500 all US Common Stocks
 }
 
 _VALID_UNIVERSES = set(_UNIVERSE_MAP.keys())
@@ -948,14 +951,19 @@ async def scan_ultra_run(request: Request):
     # scanner-api returns lists at the top level (no "lists" wrapper)
     symbols_pool: list[str] = lists_data.get(list_key, [])
 
-    # Cold-cache fallback for split_universe. The sample-lists endpoint
-    # deliberately returns [] when the NASDAQ-splits cache is cold, to avoid
-    # blocking with a 100+ HTTP fan-out under its 10s timeout. The dedicated
-    # /split-universe endpoint owns the warming path (15s budget). If the
-    # caller asked for split_universe but the pool came back empty, warm
-    # it here so a click on "Run Scan" Just Works on first use.
-    if not symbols_pool and list_key == "split_universe":
-        warm_data, warm_err = _scanner_get("/api/scans/ultra/split-universe")
+    # Cold-cache fallback for universes that are fetched live from Massive.
+    # /sample-lists deliberately returns [] when their cache is cold so it
+    # never blocks. Here we kick the corresponding warm endpoint and retry.
+    _WARMABLE = {"split_universe", "nasdaq_full", "nyse_full", "us_stocks_full"}
+    if not symbols_pool and list_key in _WARMABLE:
+        if list_key == "split_universe":
+            warm_data, warm_err_obj = scanner.call("split_universe")
+        else:
+            warm_data, warm_err_obj = scanner.call(
+                "universe_warm",
+                path_params={"key": list_key},
+            )
+        warm_err_msg = warm_err_obj.message if warm_err_obj else None
         if warm_data and warm_data.get("ok") and warm_data.get("tickers"):
             symbols_pool = warm_data["tickers"]
         else:
@@ -963,11 +971,11 @@ async def scan_ultra_run(request: Request):
                 status_code=503,
                 content={
                     "ok":     False,
-                    "error":  ("split_universe cache is cold and could not be warmed: "
-                               + (warm_err or "no tickers returned")),
-                    "hint":   ("Try again in 10–20s. The first request after deploy "
-                               "may take longer because scanner-api needs to pull "
-                               "the NASDAQ reverse-split history."),
+                    "error":  (f"{list_key} cache is cold and could not be warmed: "
+                               + (warm_err_msg or "no tickers returned")),
+                    "hint":   ("Try again in 10–20s. First request after a fresh "
+                               "scanner-api deploy takes longer because it pulls "
+                               "the full ticker list from Massive once. Cached 24h."),
                     "source": "dashboard-bff",
                 },
             )

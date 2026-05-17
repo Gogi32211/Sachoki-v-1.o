@@ -218,6 +218,86 @@ def fetch_splits(
     return out
 
 
+# ── Ticker reference (Massive — Phase F-2) ────────────────────────────────────
+
+def fetch_tickers(
+    exchange:  str | None = None,    # "XNAS" | "XNYS" | None=any
+    ticker_type: str = "CS",         # CS = Common Stock; ETF / ADRC / WARRANT etc.
+    market:    str = "stocks",
+    active:    bool = True,
+    max_pages: int = 12,             # 12 * 1000 = 12000 tickers ceiling
+) -> list[str] | None:
+    """
+    Pull active ticker symbols from Massive /v3/reference/tickers.
+
+    Default filter (CS + stocks + active=true) gives the real listed-stock
+    universe — what most "scan everything" workflows actually want. ETFs,
+    warrants, preferred shares, units etc. are excluded by default.
+
+    Returns:
+      list[str]   sorted, deduped tickers on success (possibly empty)
+      None        on auth / transport error — caller falls back to curated sample
+    """
+    try:
+        key = _massive_key()
+    except EnvironmentError as exc:
+        log.warning("fetch_tickers: %s", exc)
+        return None
+
+    url = f"{_MASSIVE_BASE}/v3/reference/tickers"
+    params = {
+        "market":  market,
+        "active":  "true" if active else "false",
+        "type":    ticker_type,
+        "limit":   1000,
+        "order":   "asc",
+        "sort":    "ticker",
+        "apiKey":  key,
+    }
+    if exchange:
+        params["exchange"] = exchange
+
+    out: list[str] = []
+    pages = 0
+    next_url: str | None = url
+    while next_url and pages < max_pages:
+        pages += 1
+        for attempt in range(3):
+            try:
+                r = requests.get(next_url, params=params if pages == 1 else None,
+                                 timeout=(5, 15))
+                if r.status_code == 429:
+                    time.sleep(1 * (attempt + 1))
+                    continue
+                r.raise_for_status()
+                data = r.json()
+                break
+            except requests.RequestException as exc:
+                if attempt == 2:
+                    log.warning("fetch_tickers: max retries (page %d): %s", pages, exc)
+                    return None if not out else out
+                time.sleep(2 ** attempt)
+        else:
+            return None if not out else out
+
+        for row in data.get("results") or []:
+            t = (row.get("ticker") or "").upper().strip()
+            # Skip OTC / pink-sheet rubbish — Massive sometimes returns 5-char
+            # OTC tickers ending in F/Y/Q. Limit to canonical 1–5 letter US
+            # symbols, optionally with -A/-B share class suffix.
+            if t and _VALID_TICKER_RE.match(t):
+                out.append(t)
+
+        next_url = data.get("next_url")
+        if next_url and "apiKey=" not in next_url:
+            next_url = f"{next_url}&apiKey={key}"
+
+    out = sorted(set(out))
+    log.info("fetch_tickers: %d active %s on %s (pages=%d)",
+             len(out), ticker_type, exchange or "ANY", pages)
+    return out
+
+
 # ── Signal computation ────────────────────────────────────────────────────────
 
 def compute_signals(df: pd.DataFrame) -> dict:

@@ -83,11 +83,13 @@ ENDPOINTS: dict[str, Endpoint] = {
 
     # ── Sample lists / split universe ────────────────────────────────────────
     "sample_lists":        Endpoint("sample_lists",        "scanner", "GET",  "/api/scans/ultra/sample-lists",        timeout=10),
-    # Cold-start can take 30–90s — scanner-api fans out ~100 HTTP requests
-    # to the NASDAQ splits history endpoint to build the universe. Once
-    # cached, subsequent calls are <100ms. 90s is well above the worst
-    # cold time observed and aligns with Railway's 120s upstream limit.
+    # After Phase F-1 (Massive replaces NASDAQ) cold-start is <2s, but the
+    # 90s ceiling stays as defense-in-depth.
     "split_universe":      Endpoint("split_universe",      "scanner", "GET",  "/api/scans/ultra/split-universe",      timeout=90),
+    # Phase F-2: warming endpoint for full Massive-backed universes
+    # (nasdaq_full / nyse_full / us_stocks_full). Cold-fetch is ~5–10s
+    # (multi-page /v3/reference/tickers). 60s ceiling is generous.
+    "universe_warm":       Endpoint("universe_warm",       "scanner", "GET",  "/api/scans/ultra/universe/{key}",      timeout=60),
 
     # ── Scan lifecycle ───────────────────────────────────────────────────────
     # "ack" semantics — POST only confirms the scan was started.
@@ -132,9 +134,10 @@ def _service_url(service: str) -> str:
 def call(
     name: str,
     *,
-    params:  Mapping[str, Any] | None = None,
-    body:    Mapping[str, Any] | None = None,
-    headers: Mapping[str, str] | None = None,
+    params:      Mapping[str, Any] | None = None,
+    body:        Mapping[str, Any] | None = None,
+    headers:     Mapping[str, str] | None = None,
+    path_params: Mapping[str, Any] | None = None,
 ) -> tuple[dict | None, UpstreamError | None]:
     """
     Invoke a registered upstream endpoint. Never raises.
@@ -159,7 +162,20 @@ def call(
             f"{ep.service.upper()}_API_URL not configured",
         )
 
-    url = f"{base}{ep.path}"
+    # Path templating: endpoints with {placeholders} (e.g. /universe/{key})
+    # need their path expanded before the request. Missing keys leave the
+    # literal placeholder in the URL — caller will get a 404 from upstream
+    # and we treat that as a normal HTTP error.
+    path = ep.path
+    if path_params:
+        try:
+            path = path.format(**dict(path_params))
+        except KeyError as exc:
+            return None, UpstreamError(
+                UpstreamErrorCode.UNKNOWN,
+                f"path param missing for {ep.name}: {exc}",
+            )
+    url = f"{base}{path}"
     last_err: UpstreamError | None = None
 
     hdrs = dict(headers or {})

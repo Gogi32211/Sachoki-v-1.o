@@ -43,9 +43,14 @@ _ALLOWED_UNIVERSES  = {
     "manual_test", "sp500_sample", "nasdaq_sample",
     "watchlist_sample", "custom_sample",
     # Large universe (NASDAQ reverse-split history, typically 500–2000+
-    # tickers). Resolves via the split_universe cache. Use this with
-    # symbol_count=0 / MAX to actually fill the database from a big list.
+    # tickers). Resolves via the split_universe cache.
     "split_universe",
+    # Phase F-2: full live universes pulled from Massive /v3/reference/tickers,
+    # filtered to active Common Stock only. ~3000 NASDAQ / ~2500 NYSE /
+    # ~5500 combined. Each cached 24h after first fetch.
+    "nasdaq_full",
+    "nyse_full",
+    "us_stocks_full",
 }
 _SCHEDULER_ENABLED  = False
 
@@ -84,6 +89,39 @@ _cancel_event   = threading.Event()  # set to request cancel between symbols
 
 
 _ALLOWED_SCORING_MODES = {"temporary", "real", "compare"}
+
+
+# ── Full-universe ticker cache (Phase F-2) ─────────────────────────────────────
+# Maps universe-key → (tickers, fetched_at_epoch). 24h TTL — Massive listings
+# change rarely, and fetching ~3000 tickers takes a few seconds even from cache.
+_TICKER_UNIVERSE_TTL = 24 * 3600
+_ticker_universe_cache: dict[str, tuple[list[str], float]] = {}
+_ticker_universe_lock = threading.Lock()
+
+
+def _get_full_universe(key: str) -> list[str]:
+    """
+    Resolve "nasdaq_full" / "nyse_full" / "us_stocks_full" to a live list of
+    Common Stock tickers from Massive. Cached in-process for 24h.
+
+    Returns [] on any fetch failure (caller handles "no symbols found").
+    """
+    import time as _t
+    with _ticker_universe_lock:
+        hit = _ticker_universe_cache.get(key)
+        if hit and (_t.time() - hit[1]) < _TICKER_UNIVERSE_TTL:
+            return list(hit[0])
+
+    from . import scan_engine as _se
+    exch_map = {"nasdaq_full": "XNAS", "nyse_full": "XNYS", "us_stocks_full": None}
+    tickers = _se.fetch_tickers(exchange=exch_map.get(key))
+    if tickers is None:
+        log.warning("_get_full_universe: Massive fetch failed for %s", key)
+        return []
+
+    with _ticker_universe_lock:
+        _ticker_universe_cache[key] = (tickers, _t.time())
+    return list(tickers)
 
 
 class ScanRequest(BaseModel):
@@ -1402,6 +1440,16 @@ def ultra_sample_lists():
     except Exception as exc:
         log.warning("ultra_sample_lists: split cache read failed: %s", exc)
 
+    # Phase F-2: read full universes from cache only — if not warm, return []
+    # and let the dedicated /universe/{key} endpoint warm on demand. Same
+    # pattern as split_universe to avoid blocking /sample-lists.
+    import time as _t
+    def _cached(k: str) -> list[str]:
+        hit = _ticker_universe_cache.get(k)
+        if hit and (_t.time() - hit[1]) < _TICKER_UNIVERSE_TTL:
+            return list(hit[0])
+        return []
+
     return {
         "manual_default":   _DEFAULT_SYMBOLS,
         "sp500_sample":     _SP500_SAMPLE,
@@ -1410,6 +1458,13 @@ def ultra_sample_lists():
         "custom_sample":    [],
         "split_universe":   split_tickers,
         "split_cache_warm": bool(split_tickers),
+        # Full Massive-backed universes — warm on first scan request.
+        "nasdaq_full":      _cached("nasdaq_full"),
+        "nyse_full":        _cached("nyse_full"),
+        "us_stocks_full":   _cached("us_stocks_full"),
+        "nasdaq_full_warm":    bool(_cached("nasdaq_full")),
+        "nyse_full_warm":      bool(_cached("nyse_full")),
+        "us_stocks_full_warm": bool(_cached("us_stocks_full")),
         "max_symbols":      _MAX_SYMBOLS,
     }
 
@@ -1437,6 +1492,43 @@ def ultra_split_universe():
     except Exception as exc:
         log.warning("split-universe endpoint failed: %s", exc)
         return {"ok": False, "tickers": [], "rows": [], "error": type(exc).__name__}
+
+
+# Phase F-2 — cold-warm endpoint for full Massive-backed universes.
+# BFF calls this when /sample-lists returns an empty universe list. After
+# first warming, in-process cache serves all subsequent requests for 24h.
+_WARMABLE_FULL_UNIVERSES = {"nasdaq_full", "nyse_full", "us_stocks_full"}
+
+
+@app.get("/api/scans/ultra/universe/{universe_key}")
+def ultra_universe_warm(universe_key: str):
+    """
+    Warm + return one of the full Massive-backed ticker universes:
+      - nasdaq_full     → all active NASDAQ Common Stocks (~3000)
+      - nyse_full       → all active NYSE Common Stocks   (~2500)
+      - us_stocks_full  → all active US Common Stocks     (~5500)
+
+    Cold-fetch takes ~5–10s (multi-page Massive call). Cached 24h.
+    """
+    if universe_key not in _WARMABLE_FULL_UNIVERSES:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": f"unknown universe: {universe_key}"},
+        )
+    try:
+        tickers = _get_full_universe(universe_key)
+        return {
+            "ok":           bool(tickers),
+            "universe_key": universe_key,
+            "tickers":      tickers,
+            "count":        len(tickers),
+            "source":       "massive",
+            "cache_ttl_h":  _TICKER_UNIVERSE_TTL // 3600,
+        }
+    except Exception as exc:
+        log.warning("universe warm %s failed: %s", universe_key, exc)
+        return {"ok": False, "universe_key": universe_key, "tickers": [],
+                "error": type(exc).__name__}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

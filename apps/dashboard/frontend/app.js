@@ -554,13 +554,16 @@ async function _adminRunScanFromSystem(opts) {
 
   const scanStartedAt = Date.now();
   const totalLabel = symbol_count === 0 ? "ALL" : String(symbol_count);
-  const isSplit = universe === "split_universe";
+  const _coldUniverses = new Set([
+    "split_universe", "nasdaq_full", "nyse_full", "us_stocks_full",
+  ]);
+  const _isCold = _coldUniverses.has(universe);
   _setAdminStatus(_adminRichProgress({
     phase: "scan", state: "running",
     title: `Run Scan · ${universe} · ${totalLabel} symbols · ${scoring_mode}`,
     startedAt: scanStartedAt,
-    detail: isSplit
-      ? "Step 1/3: warming split_universe cache. First call after a fresh scanner-api deploy can take 30–90s (~100 HTTP fan-out to NASDAQ splits history). Subsequent calls: &lt;100ms. Hang tight…"
+    detail: _isCold
+      ? `Step 1/3: warming <code>${esc(universe)}</code> from Massive. First call after a fresh scanner-api deploy can take 5–10s for full universes (paginated /v3/reference/tickers). Cached 24h after that. Subsequent calls: &lt;100ms.`
       : "Step 1/3: requesting scanner-api…",
   }));
   _setAdminButtons(true);
@@ -2132,10 +2135,17 @@ async function renderSystem() {
 
         <div class="admin-scan-opts">
           <label class="admin-scan-opt-label">Universe
-            <select id="adminUniverse">
-              <option value="sp500_sample">S&amp;P 500 Sample (~100)</option>
-              <option value="nasdaq_sample">NASDAQ Sample (~100)</option>
-              <option value="split_universe">Split Universe (500–2000+)</option>
+            <select id="adminUniverse" title="Where to draw tickers from. Sample lists = 100 curated test tickers. Full universes = live from Massive (Common Stocks only, cached 24h). Split Universe = active reverse-split events (typically 500–2000+).">
+              <optgroup label="Full live universes (Massive)">
+                <option value="us_stocks_full">All US Common Stocks (~5500)</option>
+                <option value="nasdaq_full">NASDAQ Common Stocks (~3000)</option>
+                <option value="nyse_full">NYSE Common Stocks (~2500)</option>
+                <option value="split_universe">Split Universe (500–2000+)</option>
+              </optgroup>
+              <optgroup label="Curated test samples">
+                <option value="sp500_sample">S&amp;P 500 Sample (100 curated)</option>
+                <option value="nasdaq_sample">NASDAQ Sample (100 curated)</option>
+              </optgroup>
             </select>
           </label>
           <label class="admin-scan-opt-label">Symbols
