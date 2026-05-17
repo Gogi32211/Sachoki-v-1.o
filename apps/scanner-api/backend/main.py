@@ -37,7 +37,7 @@ _CAND_TABLE = "ultra_scan_candidates"
 _SAFE_SORT_COLS = {"ultra_score", "ticker", "created_at"}
 
 # ── Controlled scan config ────────────────────────────────────────────────────
-_MAX_SYMBOLS        = int(os.environ.get("SCANNER_MAX_SYMBOLS", "500"))
+_MAX_SYMBOLS        = int(os.environ.get("SCANNER_MAX_SYMBOLS", "0"))   # 0 = unlimited
 _ALLOWED_TIMEFRAMES = ["1d"]
 _ALLOWED_UNIVERSES  = {
     "manual_test", "sp500_sample", "nasdaq_sample",
@@ -97,7 +97,7 @@ class ScanRequest(BaseModel):
         cleaned = list(dict.fromkeys(s.upper().strip() for s in v if s.strip()))
         if not cleaned:
             raise ValueError("symbols list must not be empty.")
-        if len(cleaned) > _MAX_SYMBOLS:
+        if _MAX_SYMBOLS and len(cleaned) > _MAX_SYMBOLS:
             raise ValueError(f"Controlled async scan allows max {_MAX_SYMBOLS} symbols.")
         return cleaned
 

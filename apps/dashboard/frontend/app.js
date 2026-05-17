@@ -372,8 +372,77 @@ function _adminToken()       { return ($("adminTokenInput")?.value ?? "").trim()
 function _setAdminStatus(html, cls = "") {
   const el = _adminStatusEl();
   if (!el) return;
-  el.className = "admin-status " + cls;
+  el.className = "admin-status admin-status-rich " + cls;
   el.innerHTML = html;
+}
+
+// Render a rich progress block for the System-page admin runner.
+// Used by Sync / Scan / Generate / Full Pipeline. Shows phase, percentage,
+// counts, elapsed time, ETA, current symbol, last error (if any).
+function _adminRichProgress({
+  phase,          // "sync" | "scan" | "generate" | "pipeline"
+  step,           // optional "1/3" etc.
+  state,          // "running" | "ok" | "warn" | "error" | "idle"
+  title,          // header text
+  scanned,        // count
+  total,          // count
+  saved,          // count (scan only)
+  failed,         // count
+  current,        // string symbol
+  startedAt,      // Date ms when phase started
+  detail,         // free-text detail line
+  runId,          // optional run_id label
+} = {}) {
+  const icon = phase === "sync"     ? "⇣"
+             : phase === "scan"     ? "⚡"
+             : phase === "generate" ? "▦"
+             : phase === "pipeline" ? "▶" : "•";
+  const stateCls = state === "running" ? "is-running"
+                 : state === "ok"      ? "is-ok"
+                 : state === "warn"    ? "is-warn"
+                 : state === "error"   ? "is-error" : "is-idle";
+  const pct = (total && total > 0) ? Math.min(100, Math.round(((scanned ?? 0) / total) * 100)) : null;
+  const elapsedMs = startedAt ? (Date.now() - startedAt) : 0;
+  const elapsed   = startedAt ? _fmtDur(elapsedMs) : "—";
+  let eta = "—";
+  if (startedAt && scanned > 0 && total > 0 && scanned < total) {
+    const perItem = elapsedMs / scanned;
+    const remaining = (total - scanned) * perItem;
+    eta = _fmtDur(remaining);
+  }
+  return `
+    <div class="adm-prog ${stateCls}">
+      <div class="adm-prog-head">
+        <span class="adm-prog-icon">${icon}</span>
+        <span class="adm-prog-title">${esc(title || "")}</span>
+        ${step ? `<span class="adm-prog-step">${esc(step)}</span>` : ""}
+        <span class="adm-prog-state">${esc(state || "")}</span>
+      </div>
+      ${pct !== null ? `
+        <div class="adm-prog-bar"><div class="adm-prog-bar-fill" style="width:${pct}%"></div>
+          <span class="adm-prog-bar-label">${pct}%</span>
+        </div>` : (state === "running" ? `<div class="adm-prog-bar adm-prog-bar-indet"><div class="adm-prog-bar-fill"></div></div>` : "")}
+      <div class="adm-prog-stats">
+        ${total ? `<div class="adm-prog-stat"><span>Progress</span><b>${scanned ?? 0} / ${total}</b></div>` : (scanned !== undefined ? `<div class="adm-prog-stat"><span>Processed</span><b>${scanned}</b></div>` : "")}
+        ${saved !== undefined ? `<div class="adm-prog-stat"><span>Saved</span><b>${saved}</b></div>` : ""}
+        ${failed !== undefined ? `<div class="adm-prog-stat"><span>Failed</span><b class="${failed > 0 ? 'text-warn' : ''}">${failed}</b></div>` : ""}
+        <div class="adm-prog-stat"><span>Elapsed</span><b>${elapsed}</b></div>
+        ${state === "running" && pct !== null && pct < 100 ? `<div class="adm-prog-stat"><span>ETA</span><b>${eta}</b></div>` : ""}
+        ${runId ? `<div class="adm-prog-stat"><span>Run ID</span><b>${esc(String(runId))}</b></div>` : ""}
+      </div>
+      ${current ? `<div class="adm-prog-current">→ now scanning <b>${esc(current)}</b></div>` : ""}
+      ${detail ? `<div class="adm-prog-detail">${detail}</div>` : ""}
+    </div>`;
+}
+
+function _fmtDur(ms) {
+  if (!ms || ms < 0) return "0s";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60), rs = s % 60;
+  if (m < 60) return rs ? `${m}m ${rs}s` : `${m}m`;
+  const h = Math.floor(m / 60), rm = m % 60;
+  return rm ? `${h}h ${rm}m` : `${h}h`;
 }
 function _setAdminButtons(disabled) {
   for (const id of ["adminSyncBtn", "adminScanBtn", "adminGenBtn", "adminPipeBtn"]) {
@@ -387,18 +456,24 @@ function _setAdminButtons(disabled) {
 // Returns Promise<{ok, runId, lastStatus, scanned}> for chaining.
 async function _adminRunScanFromSystem(opts) {
   if (!_adminToken()) {
-    _setAdminStatus("⚠ Paste ADMIN_TOKEN above first.", "admin-warn");
+    _setAdminStatus(_adminRichProgress({phase:"pipeline",state:"warn",title:"Paste ADMIN_TOKEN above first",detail:"Required for every admin operation. Stored only in localStorage."}));
     return { ok: false, error: "no_token" };
   }
   const universe    = (opts && opts.universe)    || localStorage.getItem("sachoki_pipe_universe")     || "sp500_sample";
-  const symbol_count= (opts && opts.symbol_count) ?? parseInt(localStorage.getItem("sachoki_pipe_count") || "25", 10);
+  // 0 = MAX (scan the entire universe). Override per-call via opts or by
+  // setting localStorage.sachoki_pipe_count.
+  const symbol_count= (opts && opts.symbol_count) ?? parseInt(localStorage.getItem("sachoki_pipe_count") || "0", 10);
   const scoring_mode= (opts && opts.scoring_mode) || localStorage.getItem("sachoki_pipe_scoring")      || "real";
   const replace     = (opts && opts.replace) ?? (localStorage.getItem("sachoki_pipe_replace") !== "false");
 
-  _setAdminStatus(
-    `⚡ Run Scan (${esc(universe)}, ${symbol_count} symbols, ${esc(scoring_mode)})…`,
-    "admin-running"
-  );
+  const scanStartedAt = Date.now();
+  const totalLabel = symbol_count === 0 ? "ALL" : String(symbol_count);
+  _setAdminStatus(_adminRichProgress({
+    phase: "scan", state: "running",
+    title: `Run Scan · ${universe} · ${totalLabel} symbols · ${scoring_mode}`,
+    startedAt: scanStartedAt,
+    detail: "Step 1/3: requesting scanner-api…",
+  }));
   _setAdminButtons(true);
 
   let runResp;
@@ -410,62 +485,99 @@ async function _adminRunScanFromSystem(opts) {
     });
     runResp = await r.json();
     if (!r.ok && runResp.error_code !== "UPSTREAM_TIMEOUT") {
-      _setAdminStatus(`✕ Scan ack failed (HTTP ${r.status}): ${esc(runResp.error || "")}`, "admin-error");
+      _setAdminStatus(_adminRichProgress({
+        phase: "scan", state: "error",
+        title: `Scan ack failed (HTTP ${r.status})`,
+        startedAt: scanStartedAt,
+        detail: esc(runResp.error || ""),
+      }));
       _setAdminButtons(false);
       return { ok: false, error: runResp.error };
     }
   } catch (err) {
-    _setAdminStatus(`✕ Scan request failed: ${esc(String(err))}`, "admin-error");
+    _setAdminStatus(_adminRichProgress({
+      phase: "scan", state: "error",
+      title: "Scan request failed",
+      startedAt: scanStartedAt,
+      detail: esc(String(err)),
+    }));
     _setAdminButtons(false);
     return { ok: false, error: String(err) };
   }
   const runId = runResp?.run_id ?? null;
 
-  // Poll status until terminal.
-  const deadline = Date.now() + 5 * 60_000;
+  // Poll status until terminal. No 5-minute deadline — MAX universes can
+  // easily run longer. We still cancel via the Cancel button on Ultra page.
   let lastStatus = "starting";
   let lastScanned = 0;
-  let lastTotal   = symbol_count;
-  while (Date.now() < deadline) {
+  let lastTotal   = symbol_count || 0;
+  let lastSaved   = 0;
+  let lastFailed  = 0;
+  let lastCurrent = "";
+  while (true) {
     await new Promise(r => setTimeout(r, 2500));
     let st;
     try {
       st = await apiFetch("/api/dashboard/scans/ultra/status",
                            runId ? { run_id: runId } : {});
     } catch { continue; }
-    lastStatus = (st.status ?? "").toLowerCase();
+    lastStatus  = (st.status ?? "").toLowerCase();
     lastScanned = st.symbols_scanned ?? lastScanned;
-    lastTotal   = st.symbols_requested ?? lastTotal;
-    _setAdminStatus(
-      `⚡ Run Scan… [${esc(lastStatus)}: ${lastScanned}/${lastTotal}]`,
-      "admin-running"
-    );
+    lastTotal   = st.symbols_requested ?? st.symbols_total ?? lastTotal;
+    lastSaved   = st.symbols_saved ?? st.candidates ?? lastSaved;
+    lastFailed  = st.symbols_failed ?? st.errors ?? lastFailed;
+    lastCurrent = st.current_symbol ?? lastCurrent;
+    _setAdminStatus(_adminRichProgress({
+      phase: "scan", state: "running",
+      title: `Run Scan · ${universe}`,
+      scanned: lastScanned, total: lastTotal,
+      saved: lastSaved, failed: lastFailed,
+      current: lastCurrent,
+      runId: runId,
+      startedAt: scanStartedAt,
+      detail: `Pipeline: market-data-api → engine-api (14 engines) → write candidates. Status: <b>${esc(lastStatus)}</b>`,
+    }));
     if (["completed","done","complete","failed","cancelled"].includes(lastStatus)) break;
   }
   _setAdminButtons(false);
 
   if (lastStatus === "failed" || lastStatus === "cancelled") {
-    _setAdminStatus(`✕ Scan ${lastStatus} after ${lastScanned}/${lastTotal} symbols.`, "admin-error");
+    _setAdminStatus(_adminRichProgress({
+      phase: "scan", state: "error",
+      title: `Scan ${lastStatus}`,
+      scanned: lastScanned, total: lastTotal,
+      saved: lastSaved, failed: lastFailed,
+      runId: runId,
+      startedAt: scanStartedAt,
+      detail: `Stopped after ${lastScanned}/${lastTotal} symbols.`,
+    }));
     return { ok: false, error: lastStatus, scanned: lastScanned };
   }
-  if (!["completed","done","complete"].includes(lastStatus)) {
-    _setAdminStatus(`⚠ Scan timeout after 5 min (status=${esc(lastStatus)}, ${lastScanned}/${lastTotal}).`, "admin-warn");
-    return { ok: false, error: "timeout", scanned: lastScanned };
-  }
-  _setAdminStatus(
-    `✓ Scan complete · run_id=<b>${runId ?? "?"}</b> · <b>${lastScanned}</b> / ${lastTotal} symbols scanned`,
-    "admin-ok"
-  );
+  _setAdminStatus(_adminRichProgress({
+    phase: "scan", state: "ok",
+    title: "Scan complete",
+    scanned: lastScanned, total: lastTotal,
+    saved: lastSaved, failed: lastFailed,
+    runId: runId,
+    startedAt: scanStartedAt,
+    detail: `<b>${lastSaved}</b> candidates written to <code>ultra_scan_candidates</code>. Next: Generate Views.`,
+  }));
   return { ok: true, runId, lastStatus, scanned: lastScanned };
 }
 
 async function _adminSyncMarketData(opts) {
   const token = _adminToken();
   if (!token) {
-    _setAdminStatus("⚠ Paste ADMIN_TOKEN above first.", "admin-warn");
+    _setAdminStatus(_adminRichProgress({phase:"pipeline",state:"warn",title:"Paste ADMIN_TOKEN above first",detail:"Required for every admin operation. Stored only in localStorage."}));
     return { ok: false, error: "no_token" };
   }
-  _setAdminStatus("⇣ Syncing market data… (this can take a while; first cold pull hits Massive for every symbol)", "admin-running");
+  const syncStartedAt = Date.now();
+  _setAdminStatus(_adminRichProgress({
+    phase: "sync", state: "running",
+    title: "Sync Market Data",
+    startedAt: syncStartedAt,
+    detail: "Pulling fresh OHLCV from Massive HTTP into <code>market_bars</code>. First cold pull = ~1-2s per symbol; warm = ~50ms.",
+  }));
   _setAdminButtons(true);
   try {
     const resp = await fetch("/api/dashboard/admin/sync-market-data", {
@@ -475,20 +587,35 @@ async function _adminSyncMarketData(opts) {
     });
     const result = await resp.json();
     if (!resp.ok) {
-      _setAdminStatus(`✕ Sync failed (HTTP ${resp.status}): ${esc(result.error || result.detail || "")}`, "admin-error");
+      _setAdminStatus(_adminRichProgress({
+        phase: "sync", state: "error",
+        title: `Sync failed (HTTP ${resp.status})`,
+        startedAt: syncStartedAt,
+        detail: esc(result.error || result.detail || ""),
+      }));
       return { ok: false, error: result.error || `HTTP ${resp.status}` };
     }
     const sent  = result.synced_from_massive ?? 0;
     const cache = result.cache_hit ?? 0;
     const fail  = result.failed ?? 0;
     const rows  = result.rows_written ?? 0;
-    _setAdminStatus(
-      `✓ Sync complete · <b>${sent}</b> fetched from Massive · <b>${cache}</b> cache hits · <b>${rows}</b> bars written · ${fail} failed`,
-      "admin-ok"
-    );
+    const total = sent + cache + fail;
+    _setAdminStatus(_adminRichProgress({
+      phase: "sync", state: "ok",
+      title: "Sync complete",
+      scanned: total, total: total,
+      saved: rows, failed: fail,
+      startedAt: syncStartedAt,
+      detail: `<b>${sent}</b> fetched from Massive · <b>${cache}</b> cache hits · <b>${rows}</b> bars written to <code>market_bars</code>.`,
+    }));
     return { ok: true, result };
   } catch (err) {
-    _setAdminStatus(`✕ Sync error: ${esc(String(err))}`, "admin-error");
+    _setAdminStatus(_adminRichProgress({
+      phase: "sync", state: "error",
+      title: "Sync error",
+      startedAt: syncStartedAt,
+      detail: esc(String(err)),
+    }));
     return { ok: false, error: String(err) };
   } finally {
     _setAdminButtons(false);
@@ -498,10 +625,16 @@ async function _adminSyncMarketData(opts) {
 async function _adminGenerateViews(opts) {
   const token = _adminToken();
   if (!token) {
-    _setAdminStatus("⚠ Paste ADMIN_TOKEN above first.", "admin-warn");
+    _setAdminStatus(_adminRichProgress({phase:"pipeline",state:"warn",title:"Paste ADMIN_TOKEN above first",detail:"Required for every admin operation. Stored only in localStorage."}));
     return { ok: false, error: "no_token" };
   }
-  _setAdminStatus("▦ Generating dashboard views (top_movers / best_setups / sector_heat / dashboard_summary)…", "admin-running");
+  const genStartedAt = Date.now();
+  _setAdminStatus(_adminRichProgress({
+    phase: "generate", state: "running",
+    title: "Generate Dashboard Views",
+    startedAt: genStartedAt,
+    detail: "generator-api is aggregating: <code>top_movers</code> · <code>best_setups</code> · <code>sector_heat</code> · <code>dashboard_summary</code>.",
+  }));
   _setAdminButtons(true);
   try {
     const resp = await fetch("/api/dashboard/admin/generate-views", {
@@ -511,23 +644,42 @@ async function _adminGenerateViews(opts) {
     });
     const result = await resp.json();
     if (!resp.ok) {
-      _setAdminStatus(`✕ Generate failed (HTTP ${resp.status}): ${esc(result.error || result.detail || "")}`, "admin-error");
+      _setAdminStatus(_adminRichProgress({
+        phase: "generate", state: "error",
+        title: `Generate failed (HTTP ${resp.status})`,
+        startedAt: genStartedAt,
+        detail: esc(result.error || result.detail || ""),
+      }));
       return { ok: false, error: result.error || `HTTP ${resp.status}` };
     }
     if (result.ok === false) {
-      _setAdminStatus(`✕ Generate failed: ${esc(result.error || result.message || "")}`, "admin-error");
+      _setAdminStatus(_adminRichProgress({
+        phase: "generate", state: "error",
+        title: "Generate failed",
+        startedAt: genStartedAt,
+        detail: esc(result.error || result.message || ""),
+      }));
       return { ok: false, error: result.error };
     }
     const runId = result.scan_run_id;
     const n     = result.candidate_count ?? 0;
     const v     = result.view_count ?? 0;
-    _setAdminStatus(
-      `✓ Views generated · run_id=<b>${runId}</b> · <b>${n}</b> candidates aggregated · <b>${v}</b> views written (${(result.views_generated || []).join(", ")})`,
-      "admin-ok"
-    );
+    _setAdminStatus(_adminRichProgress({
+      phase: "generate", state: "ok",
+      title: "Views generated",
+      scanned: v, total: 4,
+      runId: runId,
+      startedAt: genStartedAt,
+      detail: `<b>${n}</b> candidates aggregated · <b>${v}</b> views written to <code>scan_generated_views</code> (${(result.views_generated || []).join(", ")}).`,
+    }));
     return { ok: true, result };
   } catch (err) {
-    _setAdminStatus(`✕ Generate error: ${esc(String(err))}`, "admin-error");
+    _setAdminStatus(_adminRichProgress({
+      phase: "generate", state: "error",
+      title: "Generate error",
+      startedAt: genStartedAt,
+      detail: esc(String(err)),
+    }));
     return { ok: false, error: String(err) };
   } finally {
     _setAdminButtons(false);
@@ -538,7 +690,7 @@ async function _adminGenerateViews(opts) {
 // the scan step). Kept for legacy / direct in-page Run-Scan workflow.
 async function _adminFullPipeline() {
   if (!_adminToken()) {
-    _setAdminStatus("⚠ Paste ADMIN_TOKEN above first.", "admin-warn");
+    _setAdminStatus(_adminRichProgress({phase:"pipeline",state:"warn",title:"Paste ADMIN_TOKEN above first",detail:"Required for every admin operation. Stored only in localStorage."}));
     return;
   }
   _setAdminStatus("▶ Step 1/3: Sync Market Data…", "admin-running");
@@ -563,23 +715,19 @@ async function _adminFullPipeline() {
 // scoring per-run.
 async function _adminFullPipelineFromSystem() {
   if (!_adminToken()) {
-    _setAdminStatus("⚠ Paste ADMIN_TOKEN above first.", "admin-warn");
+    _setAdminStatus(_adminRichProgress({
+      phase: "pipeline", state: "warn",
+      title: "Paste ADMIN_TOKEN above first",
+      detail: "Every admin operation needs the token. Generated once on Railway → variables.",
+    }));
     return;
   }
-  _setAdminStatus("▶ Step 1/3: Sync Market Data…", "admin-running");
+  // Each sub-step writes its own rich progress block via _setAdminStatus.
+  // The chain stops on first failure so the operator sees the failing step.
   const sync = await _adminSyncMarketData();
   if (!sync.ok) return;
-
-  _setAdminStatus(_adminStatusEl().innerHTML + "<br>▶ Step 2/3: Run Scan…", "admin-running");
   const scan = await _adminRunScanFromSystem();
-  if (!scan.ok) {
-    _setAdminStatus(_adminStatusEl().innerHTML +
-      `<br>✕ Scan failed (${esc(scan.error || "?")}); skipping Generate Views.`,
-      "admin-error");
-    return;
-  }
-
-  _setAdminStatus(_adminStatusEl().innerHTML + "<br>▶ Step 3/3: Generate Views…", "admin-running");
+  if (!scan.ok) return;
   await _adminGenerateViews();
 }
 
@@ -938,14 +1086,15 @@ async function renderUltra() {
             </select>
           </label>
           <label class="scan-label">Symbols
-            <select id="scCount" title="MAX uses the entire universe list. Upstream cap is governed by SCANNER_MAX_SYMBOLS env.">
+            <select id="scCount" title="Number of symbols from the universe. MAX = no cap (entire universe). SCANNER_MAX_SYMBOLS=0 → no upstream limit.">
               <option value="10">10</option>
-              <option value="25" selected>25</option>
+              <option value="25">25</option>
               <option value="50">50</option>
               <option value="100">100</option>
               <option value="250">250</option>
               <option value="500">500</option>
-              <option value="0">MAX</option>
+              <option value="1000">1000</option>
+              <option value="0" selected>MAX (no limit)</option>
             </select>
           </label>
           <label class="scan-label">Scoring
@@ -1890,22 +2039,81 @@ async function renderSystem() {
 
       <div class="section-label">Admin Control Center</div>
       <div class="admin-card" id="adminControls">
-        <div class="admin-row">
-          <button class="btn-admin"               id="adminSyncBtn"  title="Sync OHLCV from Massive into market_bars cache. Subsequent scans skip Massive.">⇣ Sync Market Data</button>
-          <button class="btn-admin"               id="adminScanBtn"  title="Run a controlled Ultra scan using the cached bars. Use this to verify engine-api wiring without running Sync + Generate.">⚡ Run Scan</button>
-          <button class="btn-admin"               id="adminGenBtn"   title="Generate dashboard-ready views (top_movers / best_setups / sector_heat / dashboard_summary) from the latest scan candidates.">▦ Generate Views</button>
-          <button class="btn-admin btn-admin-pipe" id="adminPipeBtn" title="Sync → Run Scan → Generate Views, sequentially. The one-click refresh for the entire pipeline.">▶ Run Full Pipeline</button>
-          <span class="admin-row-divider">·</span>
-          <a class="btn-admin-link" href="#ultra" title="Open Ultra Scanner to view candidates / configure scan parameters before running.">↗ Open Ultra Scanner</a>
-        </div>
-        <div class="admin-row admin-token-row">
+
+        <div class="admin-token-row">
           <label class="admin-token-label">
-            <span>x-admin-token</span>
-            <input type="password" id="adminTokenInput" placeholder="paste ADMIN_TOKEN" autocomplete="off" />
+            <span>ADMIN TOKEN</span>
+            <input type="password" id="adminTokenInput" placeholder="paste ADMIN_TOKEN to enable controls" autocomplete="off" />
           </label>
-          <span class="admin-token-hint">Stored in this browser only (localStorage). Required for all admin operations.</span>
+          <span class="admin-token-hint">🔒 Stored in this browser only (localStorage). Required for every admin action below.</span>
         </div>
-        <div class="admin-status" id="adminStatus"></div>
+
+        <div class="admin-grid">
+          <div class="admin-action" data-action="sync">
+            <div class="admin-action-head">
+              <span class="admin-action-icon">⇣</span>
+              <span class="admin-action-title">Sync Market Data</span>
+              <span class="admin-action-badge">Step 1</span>
+            </div>
+            <div class="admin-action-meta">
+              <div><b>What:</b> pulls fresh OHLCV bars from Massive HTTP into the <code>market_bars</code> cache (owned by market-data-api).</div>
+              <div><b>When:</b> first run of the day, or any time you suspect stale bars. Skip if you just ran it.</div>
+              <div><b>Why:</b> every scan reads bars from this cache. A cold cache = slow scan (~1-2s/symbol). A warm cache = fast scan (~50ms/symbol).</div>
+            </div>
+            <button class="btn-admin btn-admin-primary" id="adminSyncBtn">⇣ Run Sync</button>
+          </div>
+
+          <div class="admin-action" data-action="scan">
+            <div class="admin-action-head">
+              <span class="admin-action-icon">⚡</span>
+              <span class="admin-action-title">Run Scan</span>
+              <span class="admin-action-badge">Step 2</span>
+            </div>
+            <div class="admin-action-meta">
+              <div><b>What:</b> runs the Ultra scan over the entire universe (no limit by default). scanner-api orchestrates → market-data-api serves bars → engine-api scores 14 engines → candidates written to Postgres.</div>
+              <div><b>When:</b> after Sync, or any time you want fresh signals. Safe to re-run.</div>
+              <div><b>Why:</b> populates <code>ultra_scan_candidates</code> — the source of truth for everything you see on Ultra / Dashboard pages.</div>
+            </div>
+            <button class="btn-admin btn-admin-primary" id="adminScanBtn">⚡ Run Scan</button>
+          </div>
+
+          <div class="admin-action" data-action="generate">
+            <div class="admin-action-head">
+              <span class="admin-action-icon">▦</span>
+              <span class="admin-action-title">Generate Views</span>
+              <span class="admin-action-badge">Step 3</span>
+            </div>
+            <div class="admin-action-meta">
+              <div><b>What:</b> generator-api reads the latest candidates and pre-aggregates 4 dashboard payloads: top_movers, best_setups, sector_heat, dashboard_summary.</div>
+              <div><b>When:</b> after Run Scan completes. Required for Dashboard page to show fresh data.</div>
+              <div><b>Why:</b> the Dashboard page reads these pre-aggregated views — not raw candidates — so it loads instantly regardless of universe size.</div>
+            </div>
+            <button class="btn-admin btn-admin-primary" id="adminGenBtn">▦ Generate Views</button>
+          </div>
+
+          <div class="admin-action admin-action-hero" data-action="pipeline">
+            <div class="admin-action-head">
+              <span class="admin-action-icon">▶</span>
+              <span class="admin-action-title">Run Full Pipeline</span>
+              <span class="admin-action-badge admin-action-badge-hero">1+2+3</span>
+            </div>
+            <div class="admin-action-meta">
+              <div><b>What:</b> chains Sync → Scan → Generate sequentially. Stops on first failure with a clear error.</div>
+              <div><b>When:</b> start-of-day, after deploying a code change, or whenever you want a clean end-to-end refresh.</div>
+              <div><b>Why:</b> one click to get from "fresh data needed" to "Dashboard + Ultra both updated". No manual sequencing.</div>
+            </div>
+            <button class="btn-admin btn-admin-hero" id="adminPipeBtn">▶ Run Full Pipeline</button>
+          </div>
+        </div>
+
+        <div class="admin-shortcuts">
+          <a class="btn-admin-link" href="#ultra" title="Open Ultra Scanner to view candidates / configure scan parameters per-run.">↗ Open Ultra Scanner</a>
+          <a class="btn-admin-link" href="#dashboard" title="Open the Dashboard page (reads the pre-aggregated generator-api views).">↗ Open Dashboard</a>
+        </div>
+
+        <div class="admin-status admin-status-rich" id="adminStatus">
+          <div class="admin-status-empty">Awaiting action. Pick a step above — each runs independently or chain them with Run Full Pipeline.</div>
+        </div>
       </div>
 
       <div class="section-label">Service Health</div>
