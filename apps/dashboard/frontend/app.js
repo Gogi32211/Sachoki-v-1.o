@@ -303,7 +303,7 @@ async function renderDashboard() {
   const sum    = data.summary ?? {};
 
   $r().innerHTML = `
-    <div class="page-container">
+    <div class="page-container wide">
       <div class="page-header">
         <div class="ph-title">Market Intelligence</div>
         <div class="ph-meta">Top movers, best setups, and distribution breakdown</div>
@@ -405,6 +405,12 @@ let _pollTimer       = null;
 let _scanRunId       = null;
 let _scanRunning     = false;
 
+// Server-side admin token flag. Set after first /api/debug/status fetch.
+// When true, the dashboard BFF auto-fills x-admin-token on every admin
+// call (Sync + Generate), and the frontend doesn't need to send one.
+// Configure via Railway → dashboard variables → SACHOKI_ADMIN_TOKEN.
+let _serverHasAdminToken = false;
+
 // ── Super Chart state ─────────────────────────────────────────────────────────
 let _chartMode       = "latest";   // "latest" | "history"
 let _historyLookback = 60;
@@ -445,6 +451,9 @@ function _warmSplitUniverseInBackground() {
 // ── Admin Control Center actions ──────────────────────────────────────────
 function _adminStatusEl()    { return $("adminStatus"); }
 function _adminToken()       { return ($("adminTokenInput")?.value ?? "").trim(); }
+// Returns true if we have any way to authorize admin calls — either the
+// user pasted a token, or the dashboard BFF has SACHOKI_ADMIN_TOKEN set.
+function _hasAdminAuth()     { return _serverHasAdminToken || !!_adminToken(); }
 function _setAdminStatus(html, cls = "") {
   const el = _adminStatusEl();
   if (!el) return;
@@ -534,10 +543,8 @@ function _setAdminButtons(disabled) {
 // can override via console.
 // Returns Promise<{ok, runId, lastStatus, scanned}> for chaining.
 async function _adminRunScanFromSystem(opts) {
-  if (!_adminToken()) {
-    _setAdminStatus(_adminRichProgress({phase:"pipeline",state:"warn",title:"Paste ADMIN_TOKEN above first",detail:"Required for every admin operation. Stored only in localStorage."}));
-    return { ok: false, error: "no_token" };
-  }
+  // Run Scan itself does NOT require a token (scanner-api /api/scans/ultra/run
+  // is public). Sync + Generate still need one, enforced in their own runners.
   // Read from admin panel selects if present (System page), otherwise localStorage fallback
   const universe    = (opts && opts.universe)    || $("adminUniverse")?.value || localStorage.getItem("sachoki_pipe_universe") || "sp500_sample";
   const symbol_count= (opts && opts.symbol_count) != null ? opts.symbol_count
@@ -646,8 +653,8 @@ async function _adminRunScanFromSystem(opts) {
 
 async function _adminSyncMarketData(opts) {
   const token = _adminToken();
-  if (!token) {
-    _setAdminStatus(_adminRichProgress({phase:"pipeline",state:"warn",title:"Paste ADMIN_TOKEN above first",detail:"Required for every admin operation. Stored only in localStorage."}));
+  if (!token && !_serverHasAdminToken) {
+    _setAdminStatus(_adminRichProgress({phase:"pipeline",state:"warn",title:"No ADMIN TOKEN available",detail:"Either paste a token above, or set <code>SACHOKI_ADMIN_TOKEN</code> on Railway → dashboard variables so the BFF can auto-fill it."}));
     return { ok: false, error: "no_token" };
   }
   const syncStartedAt = Date.now();
@@ -707,8 +714,8 @@ async function _adminSyncMarketData(opts) {
 
 async function _adminGenerateViews(opts) {
   const token = _adminToken();
-  if (!token) {
-    _setAdminStatus(_adminRichProgress({phase:"pipeline",state:"warn",title:"Paste ADMIN_TOKEN above first",detail:"Required for every admin operation. Stored only in localStorage."}));
+  if (!token && !_serverHasAdminToken) {
+    _setAdminStatus(_adminRichProgress({phase:"pipeline",state:"warn",title:"No ADMIN TOKEN available",detail:"Either paste a token above, or set <code>SACHOKI_ADMIN_TOKEN</code> on Railway → dashboard variables so the BFF can auto-fill it."}));
     return { ok: false, error: "no_token" };
   }
   const genStartedAt = Date.now();
@@ -801,11 +808,11 @@ async function _adminFullPipeline() {
 // page's own Run Scan button stays for granular control of universe/count/
 // scoring per-run.
 async function _adminFullPipelineFromSystem() {
-  if (!_adminToken()) {
+  if (!_hasAdminAuth()) {
     _setAdminStatus(_adminRichProgress({
       phase: "pipeline", state: "warn",
-      title: "Paste ADMIN_TOKEN above first",
-      detail: "Every admin operation needs the token. Generated once on Railway → variables.",
+      title: "No ADMIN TOKEN available",
+      detail: "Either paste a token above, or set <code>SACHOKI_ADMIN_TOKEN</code> on Railway → dashboard variables so the BFF can auto-fill it.",
     }));
     return;
   }
@@ -1146,7 +1153,7 @@ async function renderUltra() {
   const sectorOpts = sectors.map(s => `<option>${esc(s)}</option>`).join("");
 
   $r().innerHTML = `
-    <div class="page-container">
+    <div class="page-container wide">
       <div class="page-header">
         <div class="ph-title">Ultra Scanner</div>
         <div class="ph-meta">Scan candidates, filters, and signal breakdown · Run #${esc(String(scan.scan_run_id ?? "—"))}</div>
@@ -1596,7 +1603,7 @@ async function renderChart() {
   _pendingChartSym = null;
 
   $r().innerHTML = `
-    <div class="page-container">
+    <div class="page-container wide">
 
       <div class="chart-header">
         <div>
@@ -2130,8 +2137,12 @@ async function renderSystem() {
   const reach      = status.scanner_api_reachable === true;
   const chartReach = status.scanner_chart_snapshot_reachable === true;
 
+  // Sync the global flag: when the BFF has SACHOKI_ADMIN_TOKEN set, the user
+  // doesn't need to paste a token in the browser at all.
+  _serverHasAdminToken = status.dashboard_admin_token_configured === true;
+
   $r().innerHTML = `
-    <div class="page-container">
+    <div class="page-container wide">
       <div class="page-header">
         <div class="ph-title">System</div>
         <div class="ph-meta">Service health, admin controls, and pipeline management</div>
@@ -2142,11 +2153,17 @@ async function renderSystem() {
 
         <div class="admin-token-row">
           <label class="admin-token-label">
-            <span>ADMIN TOKEN</span>
-            <input type="password" id="adminTokenInput" placeholder="paste ADMIN_TOKEN from Railway → Variables" autocomplete="off" />
+            <span>ADMIN TOKEN ${_serverHasAdminToken ? '<span class="admin-tok-ok" style="font-weight:400">· server-managed</span>' : ""}</span>
+            <input type="password" id="adminTokenInput"
+                   placeholder="${_serverHasAdminToken ? "optional — BFF will use SACHOKI_ADMIN_TOKEN" : "paste ADMIN_TOKEN from Railway → Variables"}"
+                   autocomplete="off" ${_serverHasAdminToken ? "" : ""} />
           </label>
           <div class="admin-token-meta">
-            <span class="admin-token-hint">🔒 Stored in this browser only (localStorage). Required for Sync + Generate. Run Scan does <b>not</b> need it.</span>
+            <span class="admin-token-hint">
+              ${_serverHasAdminToken
+                ? "🔒 Server-managed: dashboard BFF auto-fills the token from <code>SACHOKI_ADMIN_TOKEN</code>. You don't need to paste anything. Token never reaches your browser."
+                : "🔒 Stored in this browser only (localStorage). Required for Sync + Generate. Run Scan does <b>not</b> need it. To skip this prompt forever, set <code>SACHOKI_ADMIN_TOKEN</code> on Railway → dashboard variables."}
+            </span>
             <span class="admin-token-status" id="adminTokenStatus"></span>
           </div>
         </div>
@@ -2437,10 +2454,12 @@ function _updateTokenStatus() {
   const el  = $("adminTokenStatus");
   const tok = ($("adminTokenInput")?.value ?? "").trim();
   if (!el) return;
-  if (!tok) {
-    el.innerHTML = `<span class="admin-tok-warn">⚠ Token empty — Sync &amp; Generate will fail</span>`;
+  if (tok) {
+    el.innerHTML = `<span class="admin-tok-ok">✓ Browser token set (${tok.length} chars) — will override server token if BFF also has one</span>`;
+  } else if (_serverHasAdminToken) {
+    el.innerHTML = `<span class="admin-tok-ok">✓ Server token active — Sync &amp; Generate ready, no paste needed</span>`;
   } else {
-    el.innerHTML = `<span class="admin-tok-ok">✓ Token set (${tok.length} chars)</span>`;
+    el.innerHTML = `<span class="admin-tok-warn">⚠ No token — Sync &amp; Generate will fail. Set <code>SACHOKI_ADMIN_TOKEN</code> on the dashboard service in Railway, or paste one above.</span>`;
   }
 }
 
@@ -2480,7 +2499,43 @@ const RENDERERS = {
   system:    renderSystem,
 };
 
+// ── Sidebar collapse / hide ──────────────────────────────────────────────────
+// Three states cycled by the cmdbar button: expanded → collapsed (icons only)
+// → hidden (zero-width, full-width tables). State persisted in localStorage.
+const _SIDEBAR_STATES = ["expanded", "collapsed", "hidden"];
+function _applySidebarState(state) {
+  document.body.classList.remove("sidebar-collapsed", "sidebar-hidden");
+  if (state === "collapsed") document.body.classList.add("sidebar-collapsed");
+  else if (state === "hidden") document.body.classList.add("sidebar-hidden");
+  const btn = $("sidebarToggleBtn");
+  if (btn) {
+    btn.title = state === "expanded"  ? "Collapse sidebar to icons (Ctrl+B)"
+              : state === "collapsed" ? "Hide sidebar entirely (Ctrl+B)"
+              : "Show sidebar (Ctrl+B)";
+    const ic = btn.querySelector(".sb-tog-icon");
+    if (ic) ic.textContent = state === "hidden" ? "›" : state === "collapsed" ? "‹" : "☰";
+  }
+  localStorage.setItem("sachoki_sidebar_state", state);
+}
+function _cycleSidebarState() {
+  const cur  = localStorage.getItem("sachoki_sidebar_state") || "expanded";
+  const idx  = _SIDEBAR_STATES.indexOf(cur);
+  const next = _SIDEBAR_STATES[(idx + 1) % _SIDEBAR_STATES.length];
+  _applySidebarState(next);
+}
+_applySidebarState(localStorage.getItem("sachoki_sidebar_state") || "expanded");
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 window.addEventListener("hashchange", navigate);
+window.addEventListener("keydown", e => {
+  // Ctrl/Cmd + B → cycle sidebar state. Skip when an input is focused so
+  // Cmd+B inside a text field still bolds (browser default) where applicable.
+  if ((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B")) {
+    const tag = (document.activeElement?.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea") return;
+    e.preventDefault(); _cycleSidebarState();
+  }
+});
 $("refreshBtn").addEventListener("click", refresh);
+$("sidebarToggleBtn")?.addEventListener("click", _cycleSidebarState);
 navigate();

@@ -24,6 +24,12 @@ from . import scanner_client as scanner
 SCANNER_API_URL  = scanner.SCANNER_API_URL
 RESEARCH_API_URL = scanner.RESEARCH_API_URL
 
+# Server-side admin token. When set on Railway → dashboard variables, the
+# BFF auto-fills `x-admin-token` on every admin call. Frontend doesn't need
+# to send one. Token never leaves the server — more secure than typing it
+# into the browser. Set this alongside scanner-api's ADMIN_TOKEN (same value).
+SACHOKI_ADMIN_TOKEN = os.getenv("SACHOKI_ADMIN_TOKEN", "")
+
 log = logging.getLogger(__name__)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "info").upper())
 
@@ -368,6 +374,9 @@ def debug_status():
         "scanner_api_url_configured":       scanner_url_ok,
         "scanner_api_reachable":            scanner_reachable,
         "scanner_api_health":               scanner_health,
+        # Server-managed admin token. When true, BFF auto-fills x-admin-token
+        # for Sync + Generate, so the frontend doesn't need to prompt for it.
+        "dashboard_admin_token_configured": bool(SACHOKI_ADMIN_TOKEN),
         "research_api_url_configured":      bool(RESEARCH_API_URL),
         "massive_configured":               bool(os.getenv("MASSIVE_API_KEY")),
         "anthropic_configured":             bool(os.getenv("ANTHROPIC_API_KEY")),
@@ -838,10 +847,12 @@ async def admin_sync_market_data(request: Request,
     Pre-warms market_bars cache so subsequent scans skip Massive.
     """
     body = await request.json() if request.headers.get("content-length") else {}
+    # If frontend didn't send a token, fall back to server-side env var.
+    token = x_admin_token or SACHOKI_ADMIN_TOKEN
     data, err = scanner.call(
         "admin_sync_market_data",
         body=body,
-        headers={"x-admin-token": x_admin_token},
+        headers={"x-admin-token": token},
     )
     if err is not None:
         return _err_response(err)
@@ -859,10 +870,12 @@ async def admin_generate_views(request: Request,
     into scan_generated_views.
     """
     body = await request.json() if request.headers.get("content-length") else {}
+    # If frontend didn't send a token, fall back to server-side env var.
+    token = x_admin_token or SACHOKI_ADMIN_TOKEN
     data, err = scanner.call(
         "admin_generate_views",
         body=body,
-        headers={"x-admin-token": x_admin_token},
+        headers={"x-admin-token": token},
     )
     if err is not None:
         return _err_response(err)
