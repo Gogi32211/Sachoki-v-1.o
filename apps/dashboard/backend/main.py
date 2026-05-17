@@ -382,6 +382,14 @@ def debug_status():
         "engine_api_phase":                 (scanner_full_status or {}).get("engine_api_phase"),
         "engine_api_url":                   (scanner_full_status or {}).get("engine_api_url"),
         "engine_api_error":                 (scanner_full_status or {}).get("engine_api_error"),
+        # Phase C-3: market-data-api wiring
+        "market_data_api_url_configured":   bool((scanner_full_status or {}).get("market_data_api_url_configured")),
+        "market_data_api_mode":             (scanner_full_status or {}).get("market_data_api_mode") or "in_process",
+        "market_data_api_reachable":        (scanner_full_status or {}).get("market_data_api_reachable"),
+        "market_data_api_version":          (scanner_full_status or {}).get("market_data_api_version"),
+        "market_data_api_phase":            (scanner_full_status or {}).get("market_data_api_phase"),
+        "market_data_api_url":              (scanner_full_status or {}).get("market_data_api_url"),
+        "market_data_api_error":            (scanner_full_status or {}).get("market_data_api_error"),
     }
 
 

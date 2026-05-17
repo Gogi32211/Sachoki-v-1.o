@@ -347,10 +347,14 @@ def run_controlled_scan(
             # absent, get_bars falls back transparently to direct Massive
             # fetch_bars (legacy behavior).
             try:
-                from . import market_data as _mkt
+                # Phase C-3: route through market_data_client. When
+                # MARKET_DATA_API_URL is set, this becomes an HTTP call to
+                # the standalone market-data-api service; otherwise it
+                # falls back to the in-process market_data.py module.
+                from . import market_data_client as _mkt
                 df = _mkt.get_bars(sym, tf=timeframe, days=180)
             except Exception as exc:
-                log.warning("market_data.get_bars failed for %s, falling back to fetch_bars: %s", sym, exc)
+                log.warning("market_data_client.get_bars failed for %s, falling back to fetch_bars: %s", sym, exc)
                 df = fetch_bars(sym, interval=timeframe)
             if df is None:
                 errors.append({"symbol": sym, "stage": "fetch_bars", "error": "No candles returned"})
@@ -372,8 +376,9 @@ def run_controlled_scan(
                 # shape either way.
                 from .engine_client import run_engines as _run_engines
                 try:
-                    from .split_universe import get_split_flags_for_ticker
-                    _split_flags = get_split_flags_for_ticker(sym)
+                    # Phase C-3: split flags also routed through client.
+                    from . import market_data_client as _mkt_split
+                    _split_flags = _mkt_split.get_split_flags_for_ticker(sym)
                 except Exception as exc:
                     log.debug("split flag lookup failed for %s: %s", sym, exc)
                     _split_flags = None

@@ -361,11 +361,11 @@ def get_chart_history(symbol: str, tf: str = "1d", lookback: int = 60) -> dict:
                      "warning": f"no data returned for {sym} ({tf})"},
         }
 
-    # Phase B-1: engine_api is pure compute. Resolve split flags here
-    # (market-data concern) and pass into run_engines.
+    # Phase B-1 + C-3: engine_api is pure compute. Resolve split flags via
+    # market_data_client (HTTP to market-data-api, or in-process fallback).
     try:
-        from .split_universe import get_split_flags_for_ticker
-        _split_flags = get_split_flags_for_ticker(sym)
+        from . import market_data_client as _mkt
+        _split_flags = _mkt.get_split_flags_for_ticker(sym)
     except Exception as exc:
         log.debug("split flag lookup failed for %s: %s", sym, exc)
         _split_flags = None

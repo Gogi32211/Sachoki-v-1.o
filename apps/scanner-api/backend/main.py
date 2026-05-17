@@ -300,6 +300,10 @@ def debug_status():
     from . import engine_client as _ec
     engine_status = _ec.engine_api_health()
 
+    # Phase C-3: market-data-api connectivity probe — mirror of engine-api.
+    from . import market_data_client as _mdc
+    market_data_status = _mdc.market_data_api_health()
+
     return {
         "service":                        "scanner-api",
         "mode":                           "async_controlled_scan_phase",
@@ -326,6 +330,8 @@ def debug_status():
         "latest_ultra_candidate_count":   latest_candidate_count,
         # Phase B-2: engine-api wiring status
         **engine_status,
+        # Phase C-3: market-data-api wiring status
+        **market_data_status,
     }
 
 
@@ -1466,8 +1472,17 @@ def admin_sync_market_data(
     days  = int(body.get("days", 180))
     force = bool(body.get("force", False))
 
-    from . import market_data as _mkt
-    summary = _mkt.sync_bars(symbols, tf=tf, days=days, force=force)
+    # Phase C-3: route via market_data_client. When MARKET_DATA_API_URL is
+    # set, this becomes an HTTP POST to the standalone market-data-api
+    # service — the admin token from THIS request is forwarded as the
+    # x-admin-token header to market-data-api (which validates against its
+    # own ADMIN_TOKEN env). When unset, the client falls back to the
+    # in-process market_data.py module.
+    from . import market_data_client as _mkt
+    summary = _mkt.sync_bars(
+        symbols, tf=tf, days=days, force=force,
+        admin_token=x_admin_token,
+    )
     summary["source"] = "scanner-api-admin"
     return summary
 
