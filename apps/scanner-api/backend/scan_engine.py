@@ -365,9 +365,12 @@ def run_controlled_scan(
             # Failures are non-fatal; we still produce a scored candidate.
             normalized_bars: list[dict] = []
             try:
-                from .engine_api import run_engines as _run_engines  # Phase B-1: engine_api boundary
-                # Phase B-1: engine_api is pure compute. Market-data
-                # concerns (split lifecycle) resolve here and pass in.
+                # Phase B-2: route through engine_client. When
+                # ENGINE_API_URL is set, this becomes an HTTP call to the
+                # standalone engine-api service; otherwise it falls back
+                # to the in-process engine_api/ subpackage. Same return
+                # shape either way.
+                from .engine_client import run_engines as _run_engines
                 try:
                     from .split_universe import get_split_flags_for_ticker
                     _split_flags = get_split_flags_for_ticker(sym)

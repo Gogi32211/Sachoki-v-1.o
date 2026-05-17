@@ -14,10 +14,13 @@ import numpy as np
 import pandas as pd
 
 from .scan_engine import fetch_bars
-# Phase B-1: engines moved into the engine_api subpackage. chart_engine is
-# part of the SCANNER layer (history/snapshot endpoints), not the engine
-# layer — so it imports from engine_api as a downstream consumer would.
-from .engine_api import run_engines as _run_engines
+# Phase B-2: engine compute lives behind engine_client (HTTP or in-process).
+# chart_engine is part of the SCANNER layer (history/snapshot endpoints),
+# not the engine layer — so it imports the same client scan_engine uses.
+from .engine_client import run_engines as _run_engines
+# Per-engine imports kept for individual chart endpoints that need just one
+# engine's output (e.g. /api/chart/score). These stay in-process always —
+# they're light enough that an HTTP roundtrip isn't worth it.
 from .engine_api.chart_signal_engine import compute_signals as _compute_tz
 from .engine_api.chart_wlnbb_engine  import compute_wlnbb   as _compute_wlnbb
 from .engine_api.chart_vabs_engine   import compute_vabs    as _compute_vabs, VABS_SIG_COLS
