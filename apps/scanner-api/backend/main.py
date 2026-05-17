@@ -293,6 +293,13 @@ def debug_status():
         is_running  = _scan_running
         running_rid = _current_run_id
 
+    # Phase B-2: engine-api connectivity probe. Lets dashboard System page
+    # show real-time visual confirmation that scanner-api ↔ engine-api
+    # wiring is live (Railway service graph doesn't show string-valued
+    # env-var connections).
+    from . import engine_client as _ec
+    engine_status = _ec.engine_api_health()
+
     return {
         "service":                        "scanner-api",
         "mode":                           "async_controlled_scan_phase",
@@ -317,6 +324,8 @@ def debug_status():
         "latest_ultra_scan_found":        latest_scan_found,
         "latest_ultra_scan_id":           latest_scan_id,
         "latest_ultra_candidate_count":   latest_candidate_count,
+        # Phase B-2: engine-api wiring status
+        **engine_status,
     }
 
 

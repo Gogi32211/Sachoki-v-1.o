@@ -59,6 +59,43 @@ def is_http_mode() -> bool:
     return bool(ENGINE_API_URL)
 
 
+def engine_api_health() -> dict:
+    """
+    Probe engine-api /health + /version. Used by /api/debug/status to
+    surface visual confirmation that scanner-api ↔ engine-api wiring
+    actually works. Returns dict; never raises.
+    """
+    out: dict = {
+        "engine_api_url_configured": bool(ENGINE_API_URL),
+        "engine_api_mode":           "http" if ENGINE_API_URL else "in_process",
+        "engine_api_url":            ENGINE_API_URL or None,
+        "engine_api_reachable":      None,
+        "engine_api_version":        None,
+        "engine_api_phase":          None,
+        "engine_api_error":          None,
+    }
+    if not ENGINE_API_URL:
+        return out
+    try:
+        import httpx
+        h = httpx.get(f"{ENGINE_API_URL}/health", timeout=5)
+        if h.status_code == 200 and h.json().get("status") == "ok":
+            out["engine_api_reachable"] = True
+            try:
+                v = httpx.get(f"{ENGINE_API_URL}/version", timeout=5).json()
+                out["engine_api_version"] = v.get("version")
+                out["engine_api_phase"]   = v.get("phase")
+            except Exception:
+                pass
+        else:
+            out["engine_api_reachable"] = False
+            out["engine_api_error"]     = f"HTTP {h.status_code}"
+    except Exception as exc:
+        out["engine_api_reachable"] = False
+        out["engine_api_error"]     = type(exc).__name__
+    return out
+
+
 # ── In-process path ──────────────────────────────────────────────────────────
 
 def _run_engines_in_process(

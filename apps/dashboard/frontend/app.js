@@ -381,6 +381,84 @@ function _setAdminButtons(disabled) {
   }
 }
 
+// Run a scan from the System page (no Ultra-page DOM dependency).
+// Picks universe/count/scoring defaults from localStorage so the operator
+// can override via console.
+// Returns Promise<{ok, runId, lastStatus, scanned}> for chaining.
+async function _adminRunScanFromSystem(opts) {
+  if (!_adminToken()) {
+    _setAdminStatus("⚠ Paste ADMIN_TOKEN above first.", "admin-warn");
+    return { ok: false, error: "no_token" };
+  }
+  const universe    = (opts && opts.universe)    || localStorage.getItem("sachoki_pipe_universe")     || "sp500_sample";
+  const symbol_count= (opts && opts.symbol_count) ?? parseInt(localStorage.getItem("sachoki_pipe_count") || "25", 10);
+  const scoring_mode= (opts && opts.scoring_mode) || localStorage.getItem("sachoki_pipe_scoring")      || "real";
+  const replace     = (opts && opts.replace) ?? (localStorage.getItem("sachoki_pipe_replace") !== "false");
+
+  _setAdminStatus(
+    `⚡ Run Scan (${esc(universe)}, ${symbol_count} symbols, ${esc(scoring_mode)})…`,
+    "admin-running"
+  );
+  _setAdminButtons(true);
+
+  let runResp;
+  try {
+    const r = await fetch("/api/dashboard/scans/ultra/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ universe, symbol_count, scoring_mode, timeframe: "1d", replace_latest: replace }),
+    });
+    runResp = await r.json();
+    if (!r.ok && runResp.error_code !== "UPSTREAM_TIMEOUT") {
+      _setAdminStatus(`✕ Scan ack failed (HTTP ${r.status}): ${esc(runResp.error || "")}`, "admin-error");
+      _setAdminButtons(false);
+      return { ok: false, error: runResp.error };
+    }
+  } catch (err) {
+    _setAdminStatus(`✕ Scan request failed: ${esc(String(err))}`, "admin-error");
+    _setAdminButtons(false);
+    return { ok: false, error: String(err) };
+  }
+  const runId = runResp?.run_id ?? null;
+
+  // Poll status until terminal.
+  const deadline = Date.now() + 5 * 60_000;
+  let lastStatus = "starting";
+  let lastScanned = 0;
+  let lastTotal   = symbol_count;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 2500));
+    let st;
+    try {
+      st = await apiFetch("/api/dashboard/scans/ultra/status",
+                           runId ? { run_id: runId } : {});
+    } catch { continue; }
+    lastStatus = (st.status ?? "").toLowerCase();
+    lastScanned = st.symbols_scanned ?? lastScanned;
+    lastTotal   = st.symbols_requested ?? lastTotal;
+    _setAdminStatus(
+      `⚡ Run Scan… [${esc(lastStatus)}: ${lastScanned}/${lastTotal}]`,
+      "admin-running"
+    );
+    if (["completed","done","complete","failed","cancelled"].includes(lastStatus)) break;
+  }
+  _setAdminButtons(false);
+
+  if (lastStatus === "failed" || lastStatus === "cancelled") {
+    _setAdminStatus(`✕ Scan ${lastStatus} after ${lastScanned}/${lastTotal} symbols.`, "admin-error");
+    return { ok: false, error: lastStatus, scanned: lastScanned };
+  }
+  if (!["completed","done","complete"].includes(lastStatus)) {
+    _setAdminStatus(`⚠ Scan timeout after 5 min (status=${esc(lastStatus)}, ${lastScanned}/${lastTotal}).`, "admin-warn");
+    return { ok: false, error: "timeout", scanned: lastScanned };
+  }
+  _setAdminStatus(
+    `✓ Scan complete · run_id=<b>${runId ?? "?"}</b> · <b>${lastScanned}</b> / ${lastTotal} symbols scanned`,
+    "admin-ok"
+  );
+  return { ok: true, runId, lastStatus, scanned: lastScanned };
+}
+
 async function _adminSyncMarketData(opts) {
   const token = _adminToken();
   if (!token) {
@@ -488,70 +566,16 @@ async function _adminFullPipelineFromSystem() {
     _setAdminStatus("⚠ Paste ADMIN_TOKEN above first.", "admin-warn");
     return;
   }
-
-  // Default scan parameters. Tunable via localStorage if the operator runs
-  // pipelines from System routinely (set in browser console).
-  const universe    = localStorage.getItem("sachoki_pipe_universe")     || "sp500_sample";
-  const symbol_count= parseInt(localStorage.getItem("sachoki_pipe_count") || "25", 10);
-  const scoring_mode= localStorage.getItem("sachoki_pipe_scoring")      || "real";
-  const replace     = localStorage.getItem("sachoki_pipe_replace") !== "false";
-
   _setAdminStatus("▶ Step 1/3: Sync Market Data…", "admin-running");
   const sync = await _adminSyncMarketData();
   if (!sync.ok) return;
 
-  _setAdminStatus(
-    _adminStatusEl().innerHTML +
-    `<br>▶ Step 2/3: Run Scan (${esc(universe)}, ${symbol_count} symbols, ${esc(scoring_mode)})…`,
-    "admin-running"
-  );
-
-  // Fire scan directly via BFF (no Ultra page DOM needed).
-  let runResp;
-  try {
-    const r = await fetch("/api/dashboard/scans/ultra/run", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ universe, symbol_count, scoring_mode, timeframe: "1d", replace_latest: replace }),
-    });
-    runResp = await r.json();
-    if (!r.ok && runResp.error_code !== "UPSTREAM_TIMEOUT") {
-      _setAdminStatus(_adminStatusEl().innerHTML +
-        `<br>✕ Scan ack failed (HTTP ${r.status}): ${esc(runResp.error || "")}`,
-        "admin-error");
-      return;
-    }
-  } catch (err) {
-    _setAdminStatus(_adminStatusEl().innerHTML + `<br>✕ Scan request failed: ${esc(String(err))}`, "admin-error");
-    return;
-  }
-  const runId = runResp?.run_id ?? null;
-
-  // Poll status until scan completes.
-  const deadline = Date.now() + 5 * 60_000;
-  let lastStatus = "starting";
-  while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 2500));
-    let st;
-    try {
-      st = await apiFetch("/api/dashboard/scans/ultra/status",
-                           runId ? { run_id: runId } : {});
-    } catch { continue; }
-    const s = (st.status ?? "").toLowerCase();
-    if (s !== lastStatus) {
-      lastStatus = s;
-      _setAdminStatus(_adminStatusEl().innerHTML.replace(/Step 2\/3:[^<]*/,
-        `Step 2/3: Run Scan… [${esc(s)}: ${st.symbols_scanned ?? 0}/${st.symbols_requested ?? "?"}]`),
-        "admin-running");
-    }
-    if (["completed","done","complete","failed","cancelled"].includes(s)) break;
-  }
-  if (lastStatus === "failed" || lastStatus === "cancelled") {
-    _setAdminStatus(_adminStatusEl().innerHTML + `<br>✕ Scan ${lastStatus}; skipping Generate Views.`, "admin-error");
-    return;
-  }
-  if (!["completed","done","complete"].includes(lastStatus)) {
-    _setAdminStatus(_adminStatusEl().innerHTML + "<br>⚠ Scan timeout after 5 min — skipping Generate Views.", "admin-warn");
+  _setAdminStatus(_adminStatusEl().innerHTML + "<br>▶ Step 2/3: Run Scan…", "admin-running");
+  const scan = await _adminRunScanFromSystem();
+  if (!scan.ok) {
+    _setAdminStatus(_adminStatusEl().innerHTML +
+      `<br>✕ Scan failed (${esc(scan.error || "?")}); skipping Generate Views.`,
+      "admin-error");
     return;
   }
 
@@ -1868,10 +1892,11 @@ async function renderSystem() {
       <div class="admin-card" id="adminControls">
         <div class="admin-row">
           <button class="btn-admin"               id="adminSyncBtn"  title="Sync OHLCV from Massive into market_bars cache. Subsequent scans skip Massive.">⇣ Sync Market Data</button>
+          <button class="btn-admin"               id="adminScanBtn"  title="Run a controlled Ultra scan using the cached bars. Use this to verify engine-api wiring without running Sync + Generate.">⚡ Run Scan</button>
           <button class="btn-admin"               id="adminGenBtn"   title="Generate dashboard-ready views (top_movers / best_setups / sector_heat / dashboard_summary) from the latest scan candidates.">▦ Generate Views</button>
           <button class="btn-admin btn-admin-pipe" id="adminPipeBtn" title="Sync → Run Scan → Generate Views, sequentially. The one-click refresh for the entire pipeline.">▶ Run Full Pipeline</button>
           <span class="admin-row-divider">·</span>
-          <a class="btn-admin-link" href="#ultra" title="Open Ultra Scanner to view candidates / configure scan parameters / hit Run Scan manually.">↗ Open Ultra Scanner</a>
+          <a class="btn-admin-link" href="#ultra" title="Open Ultra Scanner to view candidates / configure scan parameters before running.">↗ Open Ultra Scanner</a>
         </div>
         <div class="admin-row admin-token-row">
           <label class="admin-token-label">
@@ -1886,6 +1911,17 @@ async function renderSystem() {
       <div class="section-label">Service Health</div>
       <div class="cards-row">
         <div class="card"><div class="c-label">Scanner API</div><div class="c-value" style="font-size:1rem"><span class="pill ${reach ? "ok" : "err"}">${reach ? "reachable" : "unreachable"}</span></div></div>
+        <div class="card" title="${esc(status.engine_api_url || 'not configured — scanner-api uses in-process engines')}">
+          <div class="c-label">Engine API</div>
+          <div class="c-value" style="font-size:1rem">
+            ${status.engine_api_url_configured
+              ? (status.engine_api_reachable
+                  ? `<span class="pill ok">HTTP · v${esc(status.engine_api_version || '?')}</span>`
+                  : `<span class="pill err">unreachable</span>`)
+              : `<span class="pill warn">in-process</span>`}
+          </div>
+          ${status.engine_api_error ? `<div class="c-sub" style="color:var(--c-neg)">${esc(status.engine_api_error)}</div>` : ""}
+        </div>
         <div class="card"><div class="c-label">Chart Proxy</div><div class="c-value" style="font-size:1rem"><span class="pill ${chartReach ? "ok" : "warn"}">${chartReach ? "ready" : "not verified"}</span></div></div>
         <div class="card"><div class="c-label">DB Configured</div><div class="c-value" style="font-size:1rem;color:${status.database_configured ? "var(--green)" : "var(--text-dim)"}">${status.database_configured ? "yes" : "no"}</div></div>
         <div class="card"><div class="c-label">Redis</div><div class="c-value" style="font-size:1rem;color:${status.redis_configured ? "var(--green)" : "var(--text-dim)"}">${status.redis_configured ? "yes" : "no"}</div></div>
@@ -1914,6 +1950,8 @@ async function renderSystem() {
   }
   const syncBtn = $("adminSyncBtn");
   if (syncBtn) syncBtn.addEventListener("click", () => _adminSyncMarketData());
+  const scanBtn = $("adminScanBtn");
+  if (scanBtn) scanBtn.addEventListener("click", () => _adminRunScanFromSystem());
   const genBtn = $("adminGenBtn");
   if (genBtn) genBtn.addEventListener("click", () => _adminGenerateViews());
   const pipeBtn = $("adminPipeBtn");

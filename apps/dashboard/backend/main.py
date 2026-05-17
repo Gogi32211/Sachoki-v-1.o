@@ -321,6 +321,7 @@ def debug_status():
     scanner_reachable = False
     scanner_health: dict | None = None
     chart_snapshot_reachable = False
+    scanner_full_status: dict | None = None
 
     if scanner_url_ok:
         data, err = _scanner_get("/health")
@@ -333,6 +334,16 @@ def debug_status():
         # Probe chart proxy with a lightweight signals endpoint (no Massive fetch)
         sig_data, _ = _chart_get("/api/chart/signals")
         chart_snapshot_reachable = sig_data is not None and "implemented" in sig_data
+
+        # Phase B-2: pull scanner-api's own /api/debug/status so the
+        # dashboard System page can surface engine-api wiring status
+        # (engine_api_reachable / engine_api_mode / engine_api_version).
+        # Scanner-api's debug/status is the authoritative source — it
+        # probes engine-api from inside the cluster, which is the only
+        # place that probe is meaningful.
+        full, _ = _scanner_get("/api/debug/status")
+        if full:
+            scanner_full_status = full
 
     return {
         "service":                          "dashboard",
@@ -347,6 +358,15 @@ def debug_status():
         "anthropic_configured":             bool(os.getenv("ANTHROPIC_API_KEY")),
         "chart_proxy_available":            scanner_url_ok,
         "scanner_chart_snapshot_reachable": chart_snapshot_reachable,
+        # Phase B-2: engine-api wiring (probed by scanner-api from inside
+        # the cluster — that's the only place this probe is meaningful).
+        "engine_api_url_configured":        bool((scanner_full_status or {}).get("engine_api_url_configured")),
+        "engine_api_mode":                  (scanner_full_status or {}).get("engine_api_mode")     or "in_process",
+        "engine_api_reachable":             (scanner_full_status or {}).get("engine_api_reachable"),
+        "engine_api_version":               (scanner_full_status or {}).get("engine_api_version"),
+        "engine_api_phase":                 (scanner_full_status or {}).get("engine_api_phase"),
+        "engine_api_url":                   (scanner_full_status or {}).get("engine_api_url"),
+        "engine_api_error":                 (scanner_full_status or {}).get("engine_api_error"),
     }
 
 
