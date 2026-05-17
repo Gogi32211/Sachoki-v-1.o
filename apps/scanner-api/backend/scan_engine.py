@@ -298,6 +298,69 @@ def fetch_tickers(
     return out
 
 
+# ── Per-ticker details (Massive — Phase F-3) ──────────────────────────────────
+
+def fetch_ticker_details(symbol: str) -> dict | None:
+    """
+    Fetch one ticker's full reference record from Massive
+    `/v3/reference/tickers/{symbol}`.
+
+    Returns a normalized dict with the fields we actually need for sector
+    classification + display. None on transport / 404 / auth error.
+
+    Shape:
+      {ticker, name, primary_exchange, sic_code, sic_description,
+       market_cap, total_employees, list_date, type, is_active, currency}
+    """
+    sym = symbol.upper().strip()
+    if not _VALID_TICKER_RE.match(sym):
+        return None
+    try:
+        key = _massive_key()
+    except EnvironmentError as exc:
+        log.warning("fetch_ticker_details: %s", exc)
+        return None
+
+    url = f"{_MASSIVE_BASE}/v3/reference/tickers/{sym}"
+    params = {"apiKey": key}
+
+    for attempt in range(3):
+        try:
+            r = requests.get(url, params=params, timeout=(5, 10))
+            if r.status_code == 429:
+                time.sleep(1 * (attempt + 1))
+                continue
+            if r.status_code == 404:
+                return None
+            r.raise_for_status()
+            data = r.json()
+            break
+        except requests.RequestException as exc:
+            if attempt == 2:
+                log.debug("fetch_ticker_details %s: max retries: %s", sym, exc)
+                return None
+            time.sleep(2 ** attempt)
+    else:
+        return None
+
+    res = data.get("results") or {}
+    if not res:
+        return None
+    return {
+        "ticker":           (res.get("ticker") or sym).upper(),
+        "name":             res.get("name") or "",
+        "primary_exchange": res.get("primary_exchange") or "",
+        "sic_code":         res.get("sic_code") or "",
+        "sic_description":  res.get("sic_description") or "",
+        "market_cap":       res.get("market_cap"),
+        "total_employees":  res.get("total_employees"),
+        "list_date":        res.get("list_date") or "",
+        "type":             res.get("type") or "",
+        "is_active":        bool(res.get("active", True)),
+        "currency":         res.get("currency_name") or "",
+    }
+
+
 # ── Signal computation ────────────────────────────────────────────────────────
 
 def compute_signals(df: pd.DataFrame) -> dict:
@@ -623,7 +686,9 @@ def run_controlled_scan(
 
             candidate["timeframe"] = timeframe
             # Sector enrichment — static map, never raises
-            from .sector_map import get_sector_info
+            # Phase F-3: read from Postgres ticker_reference first (Massive-
+            # sourced, ~5500 tickers covered), fall back to static sector_map.
+            from .ticker_reference import get_sector_info
             sector_info = get_sector_info(sym)
             candidate["sector"]   = sector_info["sector"]
             candidate["industry"] = sector_info["industry"]

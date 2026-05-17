@@ -875,7 +875,30 @@ CREATE TABLE IF NOT EXISTS scan_generated_views (
     PRIMARY KEY (scan_run_id, view_type, generator_version)
 );
 CREATE INDEX IF NOT EXISTS idx_sgv_run_type ON scan_generated_views(scan_run_id, view_type);
-CREATE INDEX IF NOT EXISTS idx_sgv_updated  ON scan_generated_views(updated_at)
+CREATE INDEX IF NOT EXISTS idx_sgv_updated  ON scan_generated_views(updated_at);
+-- Phase F-3: per-ticker reference cache. One row per symbol with name,
+-- exchange, SIC + GICS sector classification, market cap, etc. Refreshed
+-- from Massive /v3/reference/tickers/{sym}. 7-day TTL on sync. Replaces
+-- the 260-ticker hand-maintained static map in sector_map.py for full
+-- universes (nasdaq_full / nyse_full / us_stocks_full).
+CREATE TABLE IF NOT EXISTS ticker_reference (
+    ticker            VARCHAR(16)  PRIMARY KEY,
+    name              TEXT         NOT NULL DEFAULT '',
+    primary_exchange  VARCHAR(8)   NOT NULL DEFAULT '',
+    sic_code          VARCHAR(8)   NOT NULL DEFAULT '',
+    sic_description   TEXT         NOT NULL DEFAULT '',
+    sector            VARCHAR(64)  NOT NULL DEFAULT '',
+    industry          VARCHAR(128) NOT NULL DEFAULT '',
+    market_cap        DOUBLE PRECISION,
+    total_employees   INTEGER,
+    list_date         DATE,
+    type              VARCHAR(16)  NOT NULL DEFAULT '',
+    is_active         BOOLEAN      NOT NULL DEFAULT TRUE,
+    currency          VARCHAR(8)   NOT NULL DEFAULT '',
+    last_synced       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_tref_sector ON ticker_reference(sector);
+CREATE INDEX IF NOT EXISTS idx_tref_synced ON ticker_reference(last_synced)
 """
 
 _SEED_MARKER  = "SEED_SAMPLE_3.5"
@@ -1600,6 +1623,52 @@ def _ensure_schema() -> None:
         with conn.cursor() as cur:
             cur.execute(_DDL_SCHEMA)
         conn.commit()
+
+
+@app.post("/api/admin/sync-ticker-reference")
+def admin_sync_ticker_reference(
+    body: dict = Body(default={}),
+    x_admin_token: str = Header(default=""),
+):
+    """
+    Phase F-3 admin endpoint: populate the ticker_reference table by
+    pulling /v3/reference/tickers/{sym} from Massive for each requested
+    symbol that's missing or older than 7 days.
+
+    Body (all optional):
+      {
+        "symbols":  ["AAPL", "MSFT", ...],   # default: full nasdaq+nyse universe
+        "universe": "us_stocks_full",        # alternative: name a registered key
+        "force":    false                     # re-pull even fresh rows
+      }
+    Returns: {synced, skipped, failed, total, coverage}
+    """
+    expected = os.environ.get("ADMIN_TOKEN", "")
+    if not expected or not secrets.compare_digest(x_admin_token, expected):
+        raise HTTPException(status_code=401, detail="invalid admin token")
+
+    from . import ticker_reference as _tref
+
+    symbols = body.get("symbols") or []
+    universe = body.get("universe") or ""
+    force    = bool(body.get("force", False))
+
+    if not symbols and universe in {"nasdaq_full", "nyse_full", "us_stocks_full"}:
+        symbols = _get_full_universe(universe)
+    if not symbols:
+        # Default: union of every full universe currently cached, otherwise
+        # fall back to the curated samples + manual list.
+        cached_keys = ("us_stocks_full", "nasdaq_full", "nyse_full")
+        for k in cached_keys:
+            symbols.extend(_ticker_universe_cache.get(k, ([], 0))[0])
+        if not symbols:
+            symbols = sorted(set(_SP500_SAMPLE + _NASDAQ_SAMPLE + _DEFAULT_SYMBOLS))
+
+    log.info("admin_sync_ticker_reference: %d symbols, force=%s",
+             len(symbols), force)
+    result = _tref.sync_ticker_details(symbols, force=force)
+    result["coverage"] = _tref.coverage_stats()
+    return result
 
 
 @app.post("/api/admin/generate-views")

@@ -293,4 +293,60 @@ def fetch_tickers(
     return out
 
 
-__all__ = ["fetch_bars", "fetch_splits", "fetch_tickers", "massive_available"]
+def fetch_ticker_details(symbol: str) -> dict | None:
+    """
+    Single-ticker reference fetch from Massive /v3/reference/tickers/{symbol}.
+    Used for sector / industry classification (sic_code + sic_description).
+    Returns normalized dict; None on auth/transport/404.
+    """
+    sym = symbol.upper().strip()
+    if not _VALID_TICKER_RE.match(sym):
+        return None
+    try:
+        key = _massive_key()
+    except EnvironmentError as exc:
+        log.warning("fetch_ticker_details: %s", exc)
+        return None
+
+    url = f"{_MASSIVE_BASE}/v3/reference/tickers/{sym}"
+    params = {"apiKey": key}
+
+    for attempt in range(3):
+        try:
+            r = requests.get(url, params=params, timeout=(5, 10))
+            if r.status_code == 429:
+                time.sleep(1 * (attempt + 1))
+                continue
+            if r.status_code == 404:
+                return None
+            r.raise_for_status()
+            data = r.json()
+            break
+        except requests.RequestException as exc:
+            if attempt == 2:
+                log.debug("fetch_ticker_details %s: max retries: %s", sym, exc)
+                return None
+            time.sleep(2 ** attempt)
+    else:
+        return None
+
+    res = data.get("results") or {}
+    if not res:
+        return None
+    return {
+        "ticker":           (res.get("ticker") or sym).upper(),
+        "name":             res.get("name") or "",
+        "primary_exchange": res.get("primary_exchange") or "",
+        "sic_code":         res.get("sic_code") or "",
+        "sic_description":  res.get("sic_description") or "",
+        "market_cap":       res.get("market_cap"),
+        "total_employees":  res.get("total_employees"),
+        "list_date":        res.get("list_date") or "",
+        "type":             res.get("type") or "",
+        "is_active":        bool(res.get("active", True)),
+        "currency":         res.get("currency_name") or "",
+    }
+
+
+__all__ = ["fetch_bars", "fetch_splits", "fetch_tickers",
+           "fetch_ticker_details", "massive_available"]

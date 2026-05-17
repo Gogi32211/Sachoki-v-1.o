@@ -2235,6 +2235,10 @@ async function renderSystem() {
         <div class="admin-shortcuts">
           <a class="btn-admin-link" href="#ultra">↗ Open Ultra Scanner</a>
           <a class="btn-admin-link" href="#dashboard">↗ Open Dashboard</a>
+          <button class="btn-admin-link" id="adminSyncRefBtn"
+                  title="Pull name + GICS sector + SIC + market_cap from Massive for every ticker. One-time, cached 7 days. Run after first 'Sync Market Data' on a full universe — otherwise sector shows 'Unknown' for tickers not in the curated 260-list.">
+            ⓘ Sync Ticker Reference (sectors)
+          </button>
         </div>
 
         <div class="admin-status admin-status-rich" id="adminStatus">
@@ -2420,6 +2424,66 @@ async function renderSystem() {
   if (genBtn)  genBtn.addEventListener("click",  () => _adminGenerateViews());
   const pipeBtn = $("adminPipeBtn");
   if (pipeBtn) pipeBtn.addEventListener("click", () => _adminFullPipelineFromSystem());
+  const refBtn = $("adminSyncRefBtn");
+  if (refBtn) refBtn.addEventListener("click", () => _adminSyncTickerReference());
+}
+
+async function _adminSyncTickerReference(opts) {
+  const token = _adminToken();
+  if (!token && !_serverHasAdminToken) {
+    _setAdminStatus(_adminRichProgress({phase:"sync",state:"warn",
+      title:"No ADMIN TOKEN available",
+      detail:"Either paste a token above, or set <code>SACHOKI_ADMIN_TOKEN</code> on Railway → dashboard variables."}));
+    return { ok: false, error: "no_token" };
+  }
+  const universe = (opts && opts.universe) || $("adminUniverse")?.value || "us_stocks_full";
+  const startedAt = Date.now();
+  _setAdminStatus(_adminRichProgress({
+    phase: "sync", state: "running",
+    title: `Sync Ticker Reference · ${universe}`,
+    startedAt,
+    detail: `Pulling /v3/reference/tickers/{sym} from Massive for every ticker in <code>${esc(universe)}</code>. One HTTP per ticker — <b>can take 5–10 minutes for full universes</b>. Cached 7 days. Sectors will appear in subsequent scans.`,
+  }));
+  _setAdminButtons(true);
+  try {
+    const r = await fetch("/api/dashboard/admin/sync-ticker-reference", {
+      method: "POST",
+      headers: { "Content-Type": "application/json",
+                 ...(token ? { "x-admin-token": token } : {}) },
+      body: JSON.stringify({ universe }),
+    });
+    const j = await r.json();
+    if (!r.ok) {
+      _setAdminStatus(_adminRichProgress({
+        phase: "sync", state: "error",
+        title: `Sync ticker reference failed (HTTP ${r.status})`,
+        startedAt,
+        detail: esc(j.error || j.detail || "(no error detail)"),
+      }));
+      _setAdminButtons(false);
+      return { ok: false, error: j.error };
+    }
+    const cov = j.coverage || {};
+    _setAdminStatus(_adminRichProgress({
+      phase: "sync", state: "ok",
+      title: "Ticker reference synced",
+      scanned: j.synced || 0, total: j.total || 0,
+      saved: j.synced || 0, failed: j.failed || 0,
+      startedAt,
+      detail: `Massive returned data for <b>${j.synced || 0}</b> tickers · <b>${j.skipped || 0}</b> were already fresh (&lt;7d old) · <b>${j.failed || 0}</b> failed. <br>Postgres <code>ticker_reference</code> now covers <b>${cov.classified || 0}</b> of <b>${cov.total || 0}</b> rows with a real GICS sector.`,
+    }));
+    _setAdminButtons(false);
+    return { ok: true, ...j };
+  } catch (err) {
+    _setAdminStatus(_adminRichProgress({
+      phase: "sync", state: "error",
+      title: "Sync ticker reference request failed",
+      startedAt,
+      detail: esc(String(err)),
+    }));
+    _setAdminButtons(false);
+    return { ok: false, error: String(err) };
+  }
 }
 
 function _updateTokenStatus() {

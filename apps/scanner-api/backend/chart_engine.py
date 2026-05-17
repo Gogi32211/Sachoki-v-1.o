@@ -256,7 +256,8 @@ def _score_panel(symbol: str, signals: dict, tf: str, df: pd.DataFrame) -> dict:
     """Run compute_scanner_ultra_candidate and return score panel dict."""
     try:
         from .scoring_adapter import compute_scanner_ultra_candidate
-        from .sector_map import get_sector_info
+        # Phase F-3: prefer Postgres-backed cache; fall back to static map.
+        from .ticker_reference import get_sector_info
         candidate = compute_scanner_ultra_candidate(symbol, signals, timeframe=tf, df=df)
         sector_info = get_sector_info(symbol)
         return {

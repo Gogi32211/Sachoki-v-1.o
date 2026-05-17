@@ -863,6 +863,28 @@ async def admin_sync_market_data(request: Request,
     return data
 
 
+@app.post("/api/dashboard/admin/sync-ticker-reference")
+async def admin_sync_ticker_reference(request: Request,
+                                       x_admin_token: str = Header(default="")):
+    """
+    Phase F-3: trigger the scanner-api admin endpoint that fills the
+    ticker_reference table with sector + SIC data from Massive. Long-running
+    (one HTTP per ticker). Uses server-managed admin token if frontend
+    doesn't send one.
+    """
+    body = await request.json() if request.headers.get("content-length") else {}
+    token = x_admin_token or SACHOKI_ADMIN_TOKEN
+    data, err = scanner.call(
+        "admin_sync_ticker_ref",
+        body=body,
+        headers={"x-admin-token": token},
+    )
+    if err is not None:
+        return _err_response(err)
+    data["source"] = "dashboard-bff"
+    return data
+
+
 @app.post("/api/dashboard/admin/generate-views")
 async def admin_generate_views(request: Request,
                                 x_admin_token: str = Header(default="")):

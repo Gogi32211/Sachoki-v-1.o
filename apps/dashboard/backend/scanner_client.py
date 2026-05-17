@@ -90,6 +90,10 @@ ENDPOINTS: dict[str, Endpoint] = {
     # (nasdaq_full / nyse_full / us_stocks_full). Cold-fetch is ~5–10s
     # (multi-page /v3/reference/tickers). 60s ceiling is generous.
     "universe_warm":       Endpoint("universe_warm",       "scanner", "GET",  "/api/scans/ultra/universe/{key}",      timeout=60),
+    # Phase F-3: populate ticker_reference table (sectors / names / SIC).
+    # Long-running — one Massive HTTP per ticker. 5500 tickers × ~100ms
+    # ≈ 10 minutes worst case; admin token required.
+    "admin_sync_ticker_ref": Endpoint("admin_sync_ticker_ref","scanner","POST","/api/admin/sync-ticker-reference",   timeout=900, kind="ack"),
 
     # ── Scan lifecycle ───────────────────────────────────────────────────────
     # "ack" semantics — POST only confirms the scan was started.
