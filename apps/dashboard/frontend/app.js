@@ -1933,6 +1933,17 @@ async function renderSystem() {
           </div>
           ${status.market_data_api_error ? `<div class="c-sub" style="color:var(--c-neg)">${esc(status.market_data_api_error)}</div>` : ""}
         </div>
+        <div class="card" title="${esc(status.generator_api_url || 'not configured — scanner-api uses in-process generator module')}">
+          <div class="c-label">Generator API</div>
+          <div class="c-value" style="font-size:1rem">
+            ${status.generator_api_url_configured
+              ? (status.generator_api_reachable
+                  ? `<span class="pill ok">HTTP · v${esc(status.generator_api_version || '?')}</span>`
+                  : `<span class="pill err">unreachable</span>`)
+              : `<span class="pill warn">in-process</span>`}
+          </div>
+          ${status.generator_api_error ? `<div class="c-sub" style="color:var(--c-neg)">${esc(status.generator_api_error)}</div>` : ""}
+        </div>
         <div class="card"><div class="c-label">Chart Proxy</div><div class="c-value" style="font-size:1rem"><span class="pill ${chartReach ? "ok" : "warn"}">${chartReach ? "ready" : "not verified"}</span></div></div>
         <div class="card"><div class="c-label">DB Configured</div><div class="c-value" style="font-size:1rem;color:${status.database_configured ? "var(--green)" : "var(--text-dim)"}">${status.database_configured ? "yes" : "no"}</div></div>
         <div class="card"><div class="c-label">Redis</div><div class="c-value" style="font-size:1rem;color:${status.redis_configured ? "var(--green)" : "var(--text-dim)"}">${status.redis_configured ? "yes" : "no"}</div></div>

@@ -390,6 +390,14 @@ def debug_status():
         "market_data_api_phase":            (scanner_full_status or {}).get("market_data_api_phase"),
         "market_data_api_url":              (scanner_full_status or {}).get("market_data_api_url"),
         "market_data_api_error":            (scanner_full_status or {}).get("market_data_api_error"),
+        # Phase E: generator-api wiring
+        "generator_api_url_configured":     bool((scanner_full_status or {}).get("generator_api_url_configured")),
+        "generator_api_mode":               (scanner_full_status or {}).get("generator_api_mode") or "in_process",
+        "generator_api_reachable":          (scanner_full_status or {}).get("generator_api_reachable"),
+        "generator_api_version":            (scanner_full_status or {}).get("generator_api_version"),
+        "generator_api_phase":              (scanner_full_status or {}).get("generator_api_phase"),
+        "generator_api_url":                (scanner_full_status or {}).get("generator_api_url"),
+        "generator_api_error":              (scanner_full_status or {}).get("generator_api_error"),
     }
 
 

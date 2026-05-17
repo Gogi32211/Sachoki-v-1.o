@@ -304,6 +304,10 @@ def debug_status():
     from . import market_data_client as _mdc
     market_data_status = _mdc.market_data_api_health()
 
+    # Phase E: generator-api connectivity probe — mirror of engine-api.
+    from . import generator_client as _gc
+    generator_status = _gc.generator_api_health()
+
     return {
         "service":                        "scanner-api",
         "mode":                           "async_controlled_scan_phase",
@@ -332,6 +336,8 @@ def debug_status():
         **engine_status,
         # Phase C-3: market-data-api wiring status
         **market_data_status,
+        # Phase E: generator-api wiring status
+        **generator_status,
     }
 
 
@@ -1553,8 +1559,16 @@ def admin_generate_views(
         for r in cur.fetchall():
             candidates.append(_normalize_candidate(r.get("row_json"), r.get("ultra_score")))
 
-    from . import generator as _gen
-    summary = _gen.generate_and_save(resolved_run_id, candidates)
+    # Phase E: route via generator_client. When GENERATOR_API_URL is set,
+    # this becomes a POST to the standalone generator-api service (which
+    # fetches candidates from shared Postgres itself, so the `candidates`
+    # list isn't sent over the wire). When unset, the client falls back
+    # to the in-process generator.py with the candidates we already read.
+    from . import generator_client as _gc
+    summary = _gc.generate_and_save(
+        resolved_run_id, candidates,
+        admin_token=x_admin_token,
+    )
     summary["ok"]     = True
     summary["source"] = "scanner-api-admin"
     return summary
@@ -1568,6 +1582,7 @@ def get_generated_view(view_type: str, run_id: int | None = Query(default=None))
       run_id    — defaults to latest completed scan
     """
     from . import generator as _gen
+    from . import generator_client as _gc
     if view_type not in _gen.VIEW_TYPES:
         raise HTTPException(status_code=400,
                             detail=f"unknown view_type {view_type!r}; must be one of {list(_gen.VIEW_TYPES)}")
@@ -1588,7 +1603,9 @@ def get_generated_view(view_type: str, run_id: int | None = Query(default=None))
                         "error": "no_completed_scan"}
             run_id = r["id"]
 
-    payload = _gen.get_view(int(run_id), view_type)
+    # Phase E: route via generator_client. HTTP path when GENERATOR_API_URL
+    # is set; otherwise in-process generator.get_view().
+    payload = _gc.get_view(int(run_id), view_type)
     return {
         "ok":                payload is not None,
         "view_type":         view_type,
