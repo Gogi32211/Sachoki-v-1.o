@@ -445,8 +445,9 @@ async function _adminGenerateViews(opts) {
   }
 }
 
+// Full Pipeline triggered FROM the Ultra page (uses on-page form values for
+// the scan step). Kept for legacy / direct in-page Run-Scan workflow.
 async function _adminFullPipeline() {
-  // Sync → Run Scan → Generate Views.
   if (!_adminToken()) {
     _setAdminStatus("⚠ Paste ADMIN_TOKEN above first.", "admin-warn");
     return;
@@ -455,8 +456,6 @@ async function _adminFullPipeline() {
   const sync = await _adminSyncMarketData();
   if (!sync.ok) return;
   _setAdminStatus(_adminStatusEl().innerHTML + "<br>▶ Step 2/3: Run Scan…", "admin-running");
-  // Kick off scan + WAIT for completion before generating views. runScan
-  // returns immediately after ack, so we poll the scan-status until done.
   await runScan();
   const ok = await _waitForScanIdle({ timeoutMs: 5 * 60_000 });
   if (!ok) {
@@ -465,6 +464,86 @@ async function _adminFullPipeline() {
       "admin-warn");
     return;
   }
+  _setAdminStatus(_adminStatusEl().innerHTML + "<br>▶ Step 3/3: Generate Views…", "admin-running");
+  await _adminGenerateViews();
+}
+
+// Full Pipeline triggered FROM the System page. Independent of the Ultra
+// page DOM — uses sensible defaults remembered in localStorage. The Ultra
+// page's own Run Scan button stays for granular control of universe/count/
+// scoring per-run.
+async function _adminFullPipelineFromSystem() {
+  if (!_adminToken()) {
+    _setAdminStatus("⚠ Paste ADMIN_TOKEN above first.", "admin-warn");
+    return;
+  }
+
+  // Default scan parameters. Tunable via localStorage if the operator runs
+  // pipelines from System routinely (set in browser console).
+  const universe    = localStorage.getItem("sachoki_pipe_universe")     || "sp500_sample";
+  const symbol_count= parseInt(localStorage.getItem("sachoki_pipe_count") || "25", 10);
+  const scoring_mode= localStorage.getItem("sachoki_pipe_scoring")      || "real";
+  const replace     = localStorage.getItem("sachoki_pipe_replace") !== "false";
+
+  _setAdminStatus("▶ Step 1/3: Sync Market Data…", "admin-running");
+  const sync = await _adminSyncMarketData();
+  if (!sync.ok) return;
+
+  _setAdminStatus(
+    _adminStatusEl().innerHTML +
+    `<br>▶ Step 2/3: Run Scan (${esc(universe)}, ${symbol_count} symbols, ${esc(scoring_mode)})…`,
+    "admin-running"
+  );
+
+  // Fire scan directly via BFF (no Ultra page DOM needed).
+  let runResp;
+  try {
+    const r = await fetch("/api/dashboard/scans/ultra/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ universe, symbol_count, scoring_mode, timeframe: "1d", replace_latest: replace }),
+    });
+    runResp = await r.json();
+    if (!r.ok && runResp.error_code !== "UPSTREAM_TIMEOUT") {
+      _setAdminStatus(_adminStatusEl().innerHTML +
+        `<br>✕ Scan ack failed (HTTP ${r.status}): ${esc(runResp.error || "")}`,
+        "admin-error");
+      return;
+    }
+  } catch (err) {
+    _setAdminStatus(_adminStatusEl().innerHTML + `<br>✕ Scan request failed: ${esc(String(err))}`, "admin-error");
+    return;
+  }
+  const runId = runResp?.run_id ?? null;
+
+  // Poll status until scan completes.
+  const deadline = Date.now() + 5 * 60_000;
+  let lastStatus = "starting";
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 2500));
+    let st;
+    try {
+      st = await apiFetch("/api/dashboard/scans/ultra/status",
+                           runId ? { run_id: runId } : {});
+    } catch { continue; }
+    const s = (st.status ?? "").toLowerCase();
+    if (s !== lastStatus) {
+      lastStatus = s;
+      _setAdminStatus(_adminStatusEl().innerHTML.replace(/Step 2\/3:[^<]*/,
+        `Step 2/3: Run Scan… [${esc(s)}: ${st.symbols_scanned ?? 0}/${st.symbols_requested ?? "?"}]`),
+        "admin-running");
+    }
+    if (["completed","done","complete","failed","cancelled"].includes(s)) break;
+  }
+  if (lastStatus === "failed" || lastStatus === "cancelled") {
+    _setAdminStatus(_adminStatusEl().innerHTML + `<br>✕ Scan ${lastStatus}; skipping Generate Views.`, "admin-error");
+    return;
+  }
+  if (!["completed","done","complete"].includes(lastStatus)) {
+    _setAdminStatus(_adminStatusEl().innerHTML + "<br>⚠ Scan timeout after 5 min — skipping Generate Views.", "admin-warn");
+    return;
+  }
+
   _setAdminStatus(_adminStatusEl().innerHTML + "<br>▶ Step 3/3: Generate Views…", "admin-running");
   await _adminGenerateViews();
 }
@@ -808,24 +887,6 @@ async function renderUltra() {
         <div class="card"><div class="c-label">Finished</div><div class="c-value" style="font-size:.7rem;padding-top:4px">${fmtDate(scan.finished_at)}</div></div>
       </div>
 
-      <div class="section-label">Admin Control Center</div>
-      <div class="admin-card" id="adminControls">
-        <div class="admin-row">
-          <button class="btn-admin"      id="adminSyncBtn"   title="Sync OHLCV from Massive into market_bars cache. Subsequent scans skip Massive.">⇣ Sync Market Data</button>
-          <button class="btn-admin"      id="adminScanBtn"   title="Run a controlled scan (uses the cache). Same as Run Scan below.">⚡ Run Scan</button>
-          <button class="btn-admin" id="adminGenBtn" title="Generate dashboard-ready views (top_movers / best_setups / sector_heat / dashboard_summary) from the latest scan candidates. Writes to scan_generated_views.">▦ Generate Views</button>
-          <button class="btn-admin btn-admin-pipe" id="adminPipeBtn" title="Sync → Scan in one click.">▶ Run Full Pipeline</button>
-        </div>
-        <div class="admin-row admin-token-row">
-          <label class="admin-token-label">
-            <span>x-admin-token</span>
-            <input type="password" id="adminTokenInput" placeholder="paste ADMIN_TOKEN" autocomplete="off" />
-          </label>
-          <span class="admin-token-hint">Stored in this browser only (localStorage). Required for Sync &amp; Full Pipeline.</span>
-        </div>
-        <div class="admin-status" id="adminStatus"></div>
-      </div>
-
       <div class="section-label">Ultra Scan Controls</div>
       <div class="scan-controls-card" id="scanControls">
         <div class="scan-safety-row">
@@ -1020,23 +1081,6 @@ async function renderUltra() {
   if (expBtn) expBtn.addEventListener("click", _exportUltraCSV);
   const dbgBtn = $("debugPanelBtn");
   if (dbgBtn) dbgBtn.addEventListener("click", _toggleUltraDebug);
-
-  // ── Admin Control Center wiring ──────────────────────────────────────────
-  const tokInput = $("adminTokenInput");
-  if (tokInput) {
-    tokInput.value = localStorage.getItem("sachoki_admin_token") || "";
-    tokInput.addEventListener("input", () => {
-      localStorage.setItem("sachoki_admin_token", tokInput.value || "");
-    });
-  }
-  const syncBtn = $("adminSyncBtn");
-  if (syncBtn) syncBtn.addEventListener("click", () => _adminSyncMarketData());
-  const adminScanBtn = $("adminScanBtn");
-  if (adminScanBtn) adminScanBtn.addEventListener("click", () => runScan());
-  const genBtn = $("adminGenBtn");
-  if (genBtn) genBtn.addEventListener("click", () => _adminGenerateViews());
-  const pipeBtn = $("adminPipeBtn");
-  if (pipeBtn) pipeBtn.addEventListener("click", () => _adminFullPipeline());
 
   // Restore running state if scan was in progress before navigation
   if (_scanRunning) {
@@ -1808,6 +1852,26 @@ async function renderSystem() {
 
   $r().innerHTML = `
     <div class="page-container">
+
+      <div class="section-label">Admin Control Center</div>
+      <div class="admin-card" id="adminControls">
+        <div class="admin-row">
+          <button class="btn-admin"               id="adminSyncBtn"  title="Sync OHLCV from Massive into market_bars cache. Subsequent scans skip Massive.">⇣ Sync Market Data</button>
+          <button class="btn-admin"               id="adminGenBtn"   title="Generate dashboard-ready views (top_movers / best_setups / sector_heat / dashboard_summary) from the latest scan candidates.">▦ Generate Views</button>
+          <button class="btn-admin btn-admin-pipe" id="adminPipeBtn" title="Sync → Run Scan → Generate Views, sequentially. The one-click refresh for the entire pipeline.">▶ Run Full Pipeline</button>
+          <span class="admin-row-divider">·</span>
+          <a class="btn-admin-link" href="#ultra" title="Open Ultra Scanner to view candidates / configure scan parameters / hit Run Scan manually.">↗ Open Ultra Scanner</a>
+        </div>
+        <div class="admin-row admin-token-row">
+          <label class="admin-token-label">
+            <span>x-admin-token</span>
+            <input type="password" id="adminTokenInput" placeholder="paste ADMIN_TOKEN" autocomplete="off" />
+          </label>
+          <span class="admin-token-hint">Stored in this browser only (localStorage). Required for all admin operations.</span>
+        </div>
+        <div class="admin-status" id="adminStatus"></div>
+      </div>
+
       <div class="section-label">Service Health</div>
       <div class="cards-row">
         <div class="card"><div class="c-label">Scanner API</div><div class="c-value" style="font-size:1rem"><span class="pill ${reach ? "ok" : "err"}">${reach ? "reachable" : "unreachable"}</span></div></div>
@@ -1828,6 +1892,21 @@ async function renderSystem() {
       <pre class="status-pre">${esc(JSON.stringify(status, null, 2))}</pre>
       <div style="font-size:.65rem;color:var(--text-dim);margin-top:8px">Fetched ${new Date().toLocaleString()}</div>
     </div>`;
+
+  // ── Admin Control Center wiring ─────────────────────────────────────────
+  const tokInput = $("adminTokenInput");
+  if (tokInput) {
+    tokInput.value = localStorage.getItem("sachoki_admin_token") || "";
+    tokInput.addEventListener("input", () => {
+      localStorage.setItem("sachoki_admin_token", tokInput.value || "");
+    });
+  }
+  const syncBtn = $("adminSyncBtn");
+  if (syncBtn) syncBtn.addEventListener("click", () => _adminSyncMarketData());
+  const genBtn = $("adminGenBtn");
+  if (genBtn) genBtn.addEventListener("click", () => _adminGenerateViews());
+  const pipeBtn = $("adminPipeBtn");
+  if (pipeBtn) pipeBtn.addEventListener("click", () => _adminFullPipelineFromSystem());
 }
 
 // ── Page registry ─────────────────────────────────────────────────────────────

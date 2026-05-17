@@ -658,6 +658,15 @@ tbody tr:last-child { border-bottom: none; }
   color: white;
 }
 .btn-admin-pipe:hover:not(:disabled) { filter: brightness(1.1); }
+.admin-row-divider {
+  color: var(--text-dim); margin: 0 4px;
+}
+.btn-admin-link {
+  font-size: 0.8rem; color: var(--text-secondary);
+  text-decoration: none; padding: 8px 10px;
+  border-radius: var(--radius); border: 1px dashed var(--border-primary);
+}
+.btn-admin-link:hover { color: var(--text-primary); border-color: var(--c-accent); }
 .soon-tag {
   font-size: 0.6rem;
   padding: 1px 5px;
