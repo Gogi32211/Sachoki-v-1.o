@@ -947,6 +947,31 @@ async def scan_ultra_run(request: Request):
 
     # scanner-api returns lists at the top level (no "lists" wrapper)
     symbols_pool: list[str] = lists_data.get(list_key, [])
+
+    # Cold-cache fallback for split_universe. The sample-lists endpoint
+    # deliberately returns [] when the NASDAQ-splits cache is cold, to avoid
+    # blocking with a 100+ HTTP fan-out under its 10s timeout. The dedicated
+    # /split-universe endpoint owns the warming path (15s budget). If the
+    # caller asked for split_universe but the pool came back empty, warm
+    # it here so a click on "Run Scan" Just Works on first use.
+    if not symbols_pool and list_key == "split_universe":
+        warm_data, warm_err = _scanner_get("/api/scans/ultra/split-universe")
+        if warm_data and warm_data.get("ok") and warm_data.get("tickers"):
+            symbols_pool = warm_data["tickers"]
+        else:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "ok":     False,
+                    "error":  ("split_universe cache is cold and could not be warmed: "
+                               + (warm_err or "no tickers returned")),
+                    "hint":   ("Try again in 10–20s. The first request after deploy "
+                               "may take longer because scanner-api needs to pull "
+                               "the NASDAQ reverse-split history."),
+                    "source": "dashboard-bff",
+                },
+            )
+
     if not symbols_pool:
         return JSONResponse(
             status_code=422,

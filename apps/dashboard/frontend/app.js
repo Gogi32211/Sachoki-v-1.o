@@ -554,11 +554,14 @@ async function _adminRunScanFromSystem(opts) {
 
   const scanStartedAt = Date.now();
   const totalLabel = symbol_count === 0 ? "ALL" : String(symbol_count);
+  const isSplit = universe === "split_universe";
   _setAdminStatus(_adminRichProgress({
     phase: "scan", state: "running",
     title: `Run Scan · ${universe} · ${totalLabel} symbols · ${scoring_mode}`,
     startedAt: scanStartedAt,
-    detail: "Step 1/3: requesting scanner-api…",
+    detail: isSplit
+      ? "Step 1/3: warming split_universe cache (first call after deploy can take 10–20s — BFF pulls NASDAQ reverse-split history)…"
+      : "Step 1/3: requesting scanner-api…",
   }));
   _setAdminButtons(true);
 
@@ -571,11 +574,12 @@ async function _adminRunScanFromSystem(opts) {
     });
     runResp = await r.json();
     if (!r.ok && runResp.error_code !== "UPSTREAM_TIMEOUT") {
+      const errText = [runResp.error, runResp.hint].filter(Boolean).map(esc).join(" — ");
       _setAdminStatus(_adminRichProgress({
         phase: "scan", state: "error",
         title: `Scan ack failed (HTTP ${r.status})`,
         startedAt: scanStartedAt,
-        detail: esc(runResp.error || ""),
+        detail: errText || "(no error detail)",
       }));
       _setAdminButtons(false);
       return { ok: false, error: runResp.error };
