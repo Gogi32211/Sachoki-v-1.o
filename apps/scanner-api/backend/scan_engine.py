@@ -340,7 +340,18 @@ def run_controlled_scan(
 
         sym = symbol.upper().strip()
         try:
-            df = fetch_bars(sym, interval=timeframe)
+            # Phase C-1: read-through cache. First scan of a symbol/tf hits
+            # Massive once and writes market_bars; subsequent scans (same day,
+            # same window) read straight from Postgres → score iterations are
+            # nearly free. If DATABASE_URL is missing or the cache table is
+            # absent, get_bars falls back transparently to direct Massive
+            # fetch_bars (legacy behavior).
+            try:
+                from . import market_data as _mkt
+                df = _mkt.get_bars(sym, tf=timeframe, days=180)
+            except Exception as exc:
+                log.warning("market_data.get_bars failed for %s, falling back to fetch_bars: %s", sym, exc)
+                df = fetch_bars(sym, interval=timeframe)
             if df is None:
                 errors.append({"symbol": sym, "stage": "fetch_bars", "error": "No candles returned"})
                 continue

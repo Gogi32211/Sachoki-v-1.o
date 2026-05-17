@@ -17,7 +17,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query
+from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
@@ -777,7 +777,27 @@ CREATE TABLE IF NOT EXISTS ultra_scan_candidates (
 );
 CREATE INDEX IF NOT EXISTS idx_usc_run_id ON ultra_scan_candidates(scan_run_id);
 CREATE INDEX IF NOT EXISTS idx_usc_ticker ON ultra_scan_candidates(ticker);
-CREATE INDEX IF NOT EXISTS idx_usc_score  ON ultra_scan_candidates(scan_run_id, ultra_score DESC)
+CREATE INDEX IF NOT EXISTS idx_usc_score  ON ultra_scan_candidates(scan_run_id, ultra_score DESC);
+-- Phase C-1 (target architecture, ARCHITECTURE_TARGET.md): market_bars cache
+-- so scoring iteration doesn't re-fetch Massive on every scan. Read-through
+-- cache lives in apps/scanner-api/backend/market_data.py.
+CREATE TABLE IF NOT EXISTS market_bars (
+    symbol     VARCHAR(16)  NOT NULL,
+    tf         VARCHAR(8)   NOT NULL,
+    ts         TIMESTAMPTZ  NOT NULL,
+    open       DOUBLE PRECISION,
+    high       DOUBLE PRECISION,
+    low        DOUBLE PRECISION,
+    close      DOUBLE PRECISION,
+    volume     DOUBLE PRECISION,
+    adjusted   BOOLEAN      NOT NULL DEFAULT TRUE,
+    provider   VARCHAR(16)  NOT NULL DEFAULT 'massive',
+    created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (symbol, tf, ts, provider, adjusted)
+);
+CREATE INDEX IF NOT EXISTS idx_mb_symbol_tf_ts ON market_bars(symbol, tf, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_mb_updated_at   ON market_bars(updated_at)
 """
 
 _SEED_MARKER  = "SEED_SAMPLE_3.5"
@@ -1382,6 +1402,64 @@ def ultra_split_universe():
 # ─────────────────────────────────────────────────────────────────────────────
 # Staging seeder (Phase 3.5, remove in Phase 6)
 # ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/api/admin/sync-market-data")
+def admin_sync_market_data(
+    body: dict = Body(default={}),
+    x_admin_token: str = Header(default=""),
+):
+    """
+    Phase C-1 admin endpoint: bulk-sync OHLCV from Massive into market_bars.
+
+    Body (all optional):
+      {
+        "symbols": ["AAPL", "MSFT", ...],     # default: union of sample lists
+        "tf":      "1d",                      # default: 1d
+        "days":    180,                       # default: 180
+        "force":   false                       # default: re-use cache hits
+      }
+
+    Auth: x-admin-token header must match ADMIN_TOKEN env var. Falls back to
+    SEED_TOKEN if ADMIN_TOKEN is not set, so existing seed setups keep
+    working without extra config.
+    """
+    expected = os.environ.get("ADMIN_TOKEN") or os.environ.get("SEED_TOKEN", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="ADMIN_TOKEN not configured on this service")
+    if not secrets.compare_digest(x_admin_token, expected):
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+    from . import db as _db
+    _db.require_db()
+    _ensure_schema()
+
+    symbols = body.get("symbols")
+    if not symbols:
+        # Default: union of all sample lists. Lets the user prime the cache
+        # for the whole universe with one click without typing tickers.
+        symbols = list({*_DEFAULT_SYMBOLS, *_SP500_SAMPLE, *_NASDAQ_SAMPLE})
+    tf    = body.get("tf",    "1d")
+    days  = int(body.get("days", 180))
+    force = bool(body.get("force", False))
+
+    from . import market_data as _mkt
+    summary = _mkt.sync_bars(symbols, tf=tf, days=days, force=force)
+    summary["source"] = "scanner-api-admin"
+    return summary
+
+
+def _ensure_schema() -> None:
+    """Run CREATE TABLE IF NOT EXISTS for all scanner-api tables. Idempotent.
+    Called by admin endpoints that need market_bars or scan tables to exist
+    on a freshly-provisioned database."""
+    from . import db as _db
+    if not _db.DATABASE_URL:
+        return
+    with _db.get_write_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(_DDL_SCHEMA)
+        conn.commit()
+
 
 @app.post("/api/admin/seed")
 def admin_seed(x_seed_token: str = Header(default="")):
