@@ -667,6 +667,21 @@ tbody tr:last-child { border-bottom: none; }
   border-radius: var(--radius); border: 1px dashed var(--border-primary);
 }
 .btn-admin-link:hover { color: var(--text-primary); border-color: var(--c-accent); }
+
+/* Data-source tag (Phase G: cached vs inline) */
+.data-source-tag {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 0.65rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.data-source-tag.ds-cache  { background: var(--c-emerald-900); color: var(--c-emerald-200); }
+.data-source-tag.ds-inline { background: var(--c-amber-900);   color: var(--c-amber-300); }
 .soon-tag {
   font-size: 0.6rem;
   padding: 1px 5px;

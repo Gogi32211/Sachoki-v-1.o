@@ -266,6 +266,29 @@ def _fetch_all_candidates(total: int) -> list[dict]:
     return data.get("candidates", []) if data else []
 
 
+def _try_generated_view(view_type: str, run_id: int | None = None) -> tuple[dict | None, int | None]:
+    """
+    Phase G: ask scanner-api for a pre-generated view (top_movers / best_setups
+    / sector_heat / dashboard_summary). Returns (payload, resolved_run_id) on
+    success, (None, run_id) on miss. Never raises — callers fall back to
+    inline computation when payload is None.
+
+    This is the boundary that makes the dashboard a true read-only consumer:
+    if scan_generated_views has the row, we serve from cache; if not, we
+    fall back to the legacy _build_* path which fetches candidates and
+    aggregates on the fly. That fallback exists so the Home page never
+    breaks when an admin has not yet clicked "Generate Views" after a scan.
+    """
+    params = {}
+    if run_id is not None:
+        params["run_id"] = run_id
+    data, err = scanner.call("get_view", params=params)
+    if err is not None or not data:
+        return None, run_id
+    views = data.get("views") or {}
+    return views.get(view_type), data.get("scan_run_id") or run_id
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Core endpoints
 # ─────────────────────────────────────────────────────────────────────────────
@@ -353,21 +376,47 @@ def dashboard_bootstrap():
             "message":         scan_data.get("message", "No completed Ultra Scan found in scanner-api."),
         }
 
-    run = scan_data.get("run", {})
+    run    = scan_data.get("run", {})
+    run_id = run.get("id")
+    total  = run.get("total_candidates") or 0
 
-    # 2 — get all candidates (up to 500)
-    total = run.get("total_candidates") or 0
-    candidates = _fetch_all_candidates(total)
+    # Phase G: prefer pre-generated views from scan_generated_views. The
+    # Ultra page still needs the full candidate list for its table, so we
+    # always fetch candidates — but aggregations (top_movers / best_setups /
+    # summary) come from the cache when the generator has run for this
+    # scan. Fall back to inline aggregation only when the cache row is
+    # missing (operator forgot to click Generate Views, or scan finished
+    # but pipeline didn't continue).
+    candidates: list[dict] = _fetch_all_candidates(total)
 
-    top_score  = max((c.get("ultra_score") or 0 for c in candidates), default=0)
-    setups_res = _build_setups(candidates, n=5)
-    movers_res = _build_top_movers(candidates, n=5)
+    movers_view, _  = _try_generated_view("top_movers",        run_id)
+    setups_view, _  = _try_generated_view("best_setups",       run_id)
+    summary_view, _ = _try_generated_view("dashboard_summary", run_id)
+
+    served_from_cache = (movers_view is not None and setups_view is not None
+                         and summary_view is not None)
+    data_source = "generator_cache" if served_from_cache else "inline_fallback"
+
+    if movers_view is None:
+        mr = _build_top_movers(candidates, n=5)
+        movers_view = {"gainers": mr["gainers"], "losers": mr["losers"], "stats": mr["stats"]}
+    if setups_view is None:
+        sr = _build_setups(candidates, n=5)
+        setups_view = {"setups": sr["setups"], "stats": {"fallback": sr.get("fallback", False)}}
+    if summary_view is None:
+        top_score = max((c.get("ultra_score") or 0 for c in candidates), default=0)
+        summary_view = {
+            "total_candidates": total,
+            "top_score":        top_score,
+            "band_counts":      _band_summary(candidates),
+            "sector_counts":    _sector_summary(candidates),
+        }
 
     return {
         "dashboard_state": "SCAN_READY",
         "latest_scan": {
             "has_data":         True,
-            "scan_run_id":      run.get("id"),
+            "scan_run_id":      run_id,
             "status":           run.get("status"),
             "universe":         run.get("universe"),
             "timeframe":        run.get("timeframe"),
@@ -376,19 +425,25 @@ def dashboard_bootstrap():
             "source":           "scanner-api",
         },
         "summary": {
-            "total_candidates": total,
-            "top_score":        top_score,
-            "bands":            _band_summary(candidates),
-            "sectors":          _sector_summary(candidates),
+            "total_candidates": summary_view.get("total_candidates", total),
+            "top_score":        summary_view.get("top_score"),
+            "bands":            summary_view.get("band_counts")   or _band_summary(candidates),
+            "sectors":          summary_view.get("sector_counts") or _sector_summary(candidates),
+            "score_buckets":    summary_view.get("score_buckets"),
+            "top_3_setups":     summary_view.get("top_3_setups"),
+            "top_3_gainers":    summary_view.get("top_3_gainers"),
+            "top_3_losers":     summary_view.get("top_3_losers"),
+            "top_sectors":      summary_view.get("top_sectors"),
         },
-        "top_candidates": candidates,
-        "best_setups":    setups_res["setups"],
+        "top_candidates": candidates,  # empty when serving from cache (Ultra page re-fetches itself)
+        "best_setups":    setups_view.get("setups", []),
         "top_movers": {
             "regular": {
-                "gainers": movers_res["gainers"],
-                "losers":  movers_res["losers"],
+                "gainers": movers_view.get("gainers", []),
+                "losers":  movers_view.get("losers",  []),
             },
         },
+        "data_source": data_source,    # "generator_cache" | "inline_fallback"
         "data_health": {
             "scanner_api": {
                 "reachable": True,
@@ -422,15 +477,38 @@ def dashboard_top_movers(
             "message":      "No change_pct data available.",
         }
 
-    run        = scan_data.get("run", {})
-    total      = run.get("total_candidates") or 0
+    run    = scan_data.get("run", {})
+    run_id = run.get("id")
+    total  = run.get("total_candidates") or 0
+
+    # Phase G: try the generator cache first (no filters). Filters
+    # (min_score / sector) force a re-aggregation pass because the cached
+    # payload is the unfiltered top-N — we run the inline builder on the
+    # cached gainers/losers shape OR refetch candidates for accurate
+    # filtering. Simplest: if any filter is set, use inline path.
+    if min_score is None and sector is None:
+        cached, resolved_run = _try_generated_view("top_movers", run_id)
+        if cached is not None:
+            return {
+                "source":       "scanner-api",
+                "scan_run_id":  resolved_run or run_id,
+                "generated_at": _now_iso(),
+                "data_source":  "generator_cache",
+                "regular": {
+                    "gainers": (cached.get("gainers") or [])[:limit],
+                    "losers":  (cached.get("losers")  or [])[:limit],
+                },
+                "stats": cached.get("stats", {}),
+            }
+
     candidates = _fetch_all_candidates(total)
     movers     = _build_top_movers(candidates, n=limit, min_score=min_score, sector=sector)
 
     return {
         "source":       "scanner-api",
-        "scan_run_id":  run.get("id"),
+        "scan_run_id":  run_id,
         "generated_at": _now_iso(),
+        "data_source":  "inline_fallback",
         "regular": {
             "gainers": movers["gainers"],
             "losers":  movers["losers"],
@@ -457,16 +535,33 @@ def dashboard_best_setups(
             "message":      "No best setups found for current scan.",
         }
 
-    run        = scan_data.get("run", {})
-    total      = run.get("total_candidates") or 0
+    run    = scan_data.get("run", {})
+    run_id = run.get("id")
+    total  = run.get("total_candidates") or 0
+
+    # Phase G: try cache when no filters are applied. Filters force inline
+    # path (cached payload is pre-aggregated and unfiltered).
+    if min_score == 70 and bands is None and sector is None:
+        cached, resolved_run = _try_generated_view("best_setups", run_id)
+        if cached is not None:
+            return {
+                "source":       "scanner-api",
+                "scan_run_id":  resolved_run or run_id,
+                "generated_at": _now_iso(),
+                "data_source":  "generator_cache",
+                "setups":       (cached.get("setups") or [])[:limit],
+                "fallback":     False,
+            }
+
     candidates = _fetch_all_candidates(total)
     bands_list = [b.strip() for b in bands.split(",")] if bands else None
     result     = _build_setups(candidates, n=limit, min_score=min_score, bands=bands_list, sector=sector)
 
     return {
         "source":       "scanner-api",
-        "scan_run_id":  run.get("id"),
+        "scan_run_id":  run_id,
         "generated_at": _now_iso(),
+        "data_source":  "inline_fallback",
         "setups":       result["setups"],
         "fallback":     result["fallback"],
     }

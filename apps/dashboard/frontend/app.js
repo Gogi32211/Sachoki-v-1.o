@@ -160,6 +160,17 @@ async function renderHome() {
   const health = data.data_health ?? {};
   const reach  = (health.scanner_api ?? {}).reachable === true;
 
+  // Phase G: visible indicator of which path served this view.
+  // generator_cache = Generate Views was run for this scan_run_id, page
+  // shows pre-aggregated payloads. inline_fallback = generator not run yet,
+  // BFF computed top_movers/best_setups/summary on the fly (slower).
+  const dataSource = data.data_source || "";
+  const sourceTag  = dataSource === "generator_cache"
+    ? `<span class="data-source-tag ds-cache"   title="Served from scan_generated_views (pre-aggregated by generator).">📦 cached</span>`
+    : dataSource === "inline_fallback"
+    ? `<span class="data-source-tag ds-inline"  title="Generator hasn't run for this scan_run_id yet. BFF aggregated on the fly. Click Generate Views in System.">⚡ inline</span>`
+    : "";
+
   let bannerCls = "ready", bannerMsg = "";
   if (state === "SCAN_READY") {
     bannerCls = "ready";
@@ -179,7 +190,7 @@ async function renderHome() {
 
   $r().innerHTML = `
     <div class="page-container">
-      <div class="state-banner ${bannerCls}">${esc(bannerMsg)}</div>
+      <div class="state-banner ${bannerCls}">${esc(bannerMsg)} ${sourceTag}</div>
       <div class="section-label">Scan Summary</div>
       <div class="cards-row">
         <div class="card"><div class="c-label">Candidates</div><div class="c-value">${sum.total_candidates ?? "—"}</div><div class="c-sub">total returned</div></div>
