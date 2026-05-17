@@ -560,7 +560,7 @@ async function _adminRunScanFromSystem(opts) {
     title: `Run Scan · ${universe} · ${totalLabel} symbols · ${scoring_mode}`,
     startedAt: scanStartedAt,
     detail: isSplit
-      ? "Step 1/3: warming split_universe cache (first call after deploy can take 10–20s — BFF pulls NASDAQ reverse-split history)…"
+      ? "Step 1/3: warming split_universe cache. First call after a fresh scanner-api deploy can take 30–90s (~100 HTTP fan-out to NASDAQ splits history). Subsequent calls: &lt;100ms. Hang tight…"
       : "Step 1/3: requesting scanner-api…",
   }));
   _setAdminButtons(true);

@@ -83,7 +83,11 @@ ENDPOINTS: dict[str, Endpoint] = {
 
     # ── Sample lists / split universe ────────────────────────────────────────
     "sample_lists":        Endpoint("sample_lists",        "scanner", "GET",  "/api/scans/ultra/sample-lists",        timeout=10),
-    "split_universe":      Endpoint("split_universe",      "scanner", "GET",  "/api/scans/ultra/split-universe",      timeout=15),
+    # Cold-start can take 30–90s — scanner-api fans out ~100 HTTP requests
+    # to the NASDAQ splits history endpoint to build the universe. Once
+    # cached, subsequent calls are <100ms. 90s is well above the worst
+    # cold time observed and aligns with Railway's 120s upstream limit.
+    "split_universe":      Endpoint("split_universe",      "scanner", "GET",  "/api/scans/ultra/split-universe",      timeout=90),
 
     # ── Scan lifecycle ───────────────────────────────────────────────────────
     # "ack" semantics — POST only confirms the scan was started.
