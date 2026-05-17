@@ -797,7 +797,22 @@ CREATE TABLE IF NOT EXISTS market_bars (
     PRIMARY KEY (symbol, tf, ts, provider, adjusted)
 );
 CREATE INDEX IF NOT EXISTS idx_mb_symbol_tf_ts ON market_bars(symbol, tf, ts DESC);
-CREATE INDEX IF NOT EXISTS idx_mb_updated_at   ON market_bars(updated_at)
+CREATE INDEX IF NOT EXISTS idx_mb_updated_at   ON market_bars(updated_at);
+-- Phase D-1 (target architecture, ARCHITECTURE_TARGET.md): dashboard-ready
+-- views produced by apps/scanner-api/backend/generator.py. Idempotent re-
+-- generation overwrites the row via ON CONFLICT (PK includes generator_version
+-- so version bumps create new rows without losing old ones).
+CREATE TABLE IF NOT EXISTS scan_generated_views (
+    scan_run_id        INTEGER     NOT NULL REFERENCES ultra_scan_runs(id) ON DELETE CASCADE,
+    view_type          VARCHAR(32) NOT NULL,
+    payload_json       JSONB       NOT NULL,
+    generator_version  VARCHAR(16) NOT NULL DEFAULT 'd1.0',
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (scan_run_id, view_type, generator_version)
+);
+CREATE INDEX IF NOT EXISTS idx_sgv_run_type ON scan_generated_views(scan_run_id, view_type);
+CREATE INDEX IF NOT EXISTS idx_sgv_updated  ON scan_generated_views(updated_at)
 """
 
 _SEED_MARKER  = "SEED_SAMPLE_3.5"
@@ -1450,8 +1465,8 @@ def admin_sync_market_data(
 
 def _ensure_schema() -> None:
     """Run CREATE TABLE IF NOT EXISTS for all scanner-api tables. Idempotent.
-    Called by admin endpoints that need market_bars or scan tables to exist
-    on a freshly-provisioned database."""
+    Called by admin endpoints that need market_bars / scan / generated_views
+    tables to exist on a freshly-provisioned database."""
     from . import db as _db
     if not _db.DATABASE_URL:
         return
@@ -1459,6 +1474,117 @@ def _ensure_schema() -> None:
         with conn.cursor() as cur:
             cur.execute(_DDL_SCHEMA)
         conn.commit()
+
+
+@app.post("/api/admin/generate-views")
+def admin_generate_views(
+    body: dict = Body(default={}),
+    x_admin_token: str = Header(default=""),
+):
+    """
+    Phase D-1 admin endpoint: run the generator on the latest scan candidates
+    (or a specified run_id) and write dashboard-ready views into
+    scan_generated_views. Idempotent — same run_id overwrites prior payloads.
+
+    Body (all optional):
+      { "run_id": 17 }         # default: latest scan run
+    """
+    expected = os.environ.get("ADMIN_TOKEN") or os.environ.get("SEED_TOKEN", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="ADMIN_TOKEN not configured on this service")
+    if not secrets.compare_digest(x_admin_token, expected):
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+    from . import db as _db
+    _db.require_db()
+    _ensure_schema()
+
+    run_id = body.get("run_id")
+    candidates: list[dict] = []
+    resolved_run_id: int | None = None
+
+    with _db.get_conn() as cur:
+        # Resolve run_id (use latest completed if not supplied)
+        if run_id is None:
+            cur.execute(
+                f"SELECT id FROM {_RUN_TABLE} WHERE is_latest=TRUE AND status='completed' "
+                f"ORDER BY finished_at DESC LIMIT 1"
+            )
+            r = cur.fetchone()
+            resolved_run_id = r["id"] if r else None
+        else:
+            resolved_run_id = int(run_id)
+
+        if resolved_run_id is None:
+            return {
+                "ok": False, "error": "no_completed_scan",
+                "message": "No latest completed scan to generate views from.",
+            }
+
+        cur.execute(
+            f"SELECT ticker, ultra_score, row_json FROM {_CAND_TABLE} "
+            f"WHERE scan_run_id=%s",
+            (resolved_run_id,),
+        )
+        for r in cur.fetchall():
+            candidates.append(_normalize_candidate(r.get("row_json"), r.get("ultra_score")))
+
+    from . import generator as _gen
+    summary = _gen.generate_and_save(resolved_run_id, candidates)
+    summary["ok"]     = True
+    summary["source"] = "scanner-api-admin"
+    return summary
+
+
+@app.get("/api/views/{view_type}")
+def get_generated_view(view_type: str, run_id: int | None = Query(default=None)):
+    """
+    Read a single generated view from the cache.
+      view_type ∈ {top_movers, best_setups, sector_heat, dashboard_summary}
+      run_id    — defaults to latest completed scan
+    """
+    from . import generator as _gen
+    if view_type not in _gen.VIEW_TYPES:
+        raise HTTPException(status_code=400,
+                            detail=f"unknown view_type {view_type!r}; must be one of {list(_gen.VIEW_TYPES)}")
+    from . import db as _db
+    if not _db.DATABASE_URL:
+        return {"ok": False, "error": "DATABASE_URL not configured",
+                "view_type": view_type, "payload": None}
+
+    if run_id is None:
+        with _db.get_conn() as cur:
+            cur.execute(
+                f"SELECT id FROM {_RUN_TABLE} WHERE is_latest=TRUE AND status='completed' "
+                f"ORDER BY finished_at DESC LIMIT 1"
+            )
+            r = cur.fetchone()
+            if not r:
+                return {"ok": False, "view_type": view_type, "payload": None,
+                        "error": "no_completed_scan"}
+            run_id = r["id"]
+
+    payload = _gen.get_view(int(run_id), view_type)
+    return {
+        "ok":                payload is not None,
+        "view_type":         view_type,
+        "scan_run_id":       int(run_id),
+        "generator_version": _gen.GENERATOR_VERSION,
+        "payload":           payload,
+    }
+
+
+@app.get("/api/views")
+def list_generated_views(run_id: int | None = Query(default=None)):
+    """Return all 4 generated views for a given run (or latest)."""
+    from . import generator as _gen
+    out = {"ok": True, "scan_run_id": run_id, "views": {}}
+    for vt in _gen.VIEW_TYPES:
+        resp = get_generated_view(vt, run_id=out["scan_run_id"])
+        if out["scan_run_id"] is None and resp.get("scan_run_id"):
+            out["scan_run_id"] = resp["scan_run_id"]
+        out["views"][vt] = resp.get("payload")
+    return out
 
 
 @app.post("/api/admin/seed")

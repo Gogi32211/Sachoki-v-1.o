@@ -365,7 +365,7 @@ function _setAdminStatus(html, cls = "") {
   el.innerHTML = html;
 }
 function _setAdminButtons(disabled) {
-  for (const id of ["adminSyncBtn", "adminScanBtn", "adminPipeBtn"]) {
+  for (const id of ["adminSyncBtn", "adminScanBtn", "adminGenBtn", "adminPipeBtn"]) {
     const b = $(id); if (b) b.disabled = disabled;
   }
 }
@@ -406,18 +406,78 @@ async function _adminSyncMarketData(opts) {
   }
 }
 
+async function _adminGenerateViews(opts) {
+  const token = _adminToken();
+  if (!token) {
+    _setAdminStatus("⚠ Paste ADMIN_TOKEN above first.", "admin-warn");
+    return { ok: false, error: "no_token" };
+  }
+  _setAdminStatus("▦ Generating dashboard views (top_movers / best_setups / sector_heat / dashboard_summary)…", "admin-running");
+  _setAdminButtons(true);
+  try {
+    const resp = await fetch("/api/dashboard/admin/generate-views", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-admin-token": token },
+      body: JSON.stringify(opts?.body ?? {}),
+    });
+    const result = await resp.json();
+    if (!resp.ok) {
+      _setAdminStatus(`✕ Generate failed (HTTP ${resp.status}): ${esc(result.error || result.detail || "")}`, "admin-error");
+      return { ok: false, error: result.error || `HTTP ${resp.status}` };
+    }
+    if (result.ok === false) {
+      _setAdminStatus(`✕ Generate failed: ${esc(result.error || result.message || "")}`, "admin-error");
+      return { ok: false, error: result.error };
+    }
+    const runId = result.scan_run_id;
+    const n     = result.candidate_count ?? 0;
+    const v     = result.view_count ?? 0;
+    _setAdminStatus(
+      `✓ Views generated · run_id=<b>${runId}</b> · <b>${n}</b> candidates aggregated · <b>${v}</b> views written (${(result.views_generated || []).join(", ")})`,
+      "admin-ok"
+    );
+    return { ok: true, result };
+  } catch (err) {
+    _setAdminStatus(`✕ Generate error: ${esc(String(err))}`, "admin-error");
+    return { ok: false, error: String(err) };
+  } finally {
+    _setAdminButtons(false);
+  }
+}
+
 async function _adminFullPipeline() {
-  // Sync → Run Scan. Generate Views is Phase E placeholder.
+  // Sync → Run Scan → Generate Views.
   if (!_adminToken()) {
     _setAdminStatus("⚠ Paste ADMIN_TOKEN above first.", "admin-warn");
     return;
   }
-  _setAdminStatus("▶ Step 1/2: Sync Market Data…", "admin-running");
+  _setAdminStatus("▶ Step 1/3: Sync Market Data…", "admin-running");
   const sync = await _adminSyncMarketData();
-  if (!sync.ok) return;  // syncMarketData already set the error message
-  _setAdminStatus(_adminStatusEl().innerHTML + "<br>▶ Step 2/2: Run Scan…", "admin-running");
-  await runScan();  // existing flow; its own progress card takes over
-  // Don't overwrite admin status — the scan progress UI shows running state.
+  if (!sync.ok) return;
+  _setAdminStatus(_adminStatusEl().innerHTML + "<br>▶ Step 2/3: Run Scan…", "admin-running");
+  // Kick off scan + WAIT for completion before generating views. runScan
+  // returns immediately after ack, so we poll the scan-status until done.
+  await runScan();
+  const ok = await _waitForScanIdle({ timeoutMs: 5 * 60_000 });
+  if (!ok) {
+    _setAdminStatus(_adminStatusEl().innerHTML +
+      "<br>⚠ Scan didn't finish within 5 min — skipping Generate Views. Run it manually after the scan completes.",
+      "admin-warn");
+    return;
+  }
+  _setAdminStatus(_adminStatusEl().innerHTML + "<br>▶ Step 3/3: Generate Views…", "admin-running");
+  await _adminGenerateViews();
+}
+
+async function _waitForScanIdle({ timeoutMs = 300000, pollMs = 2500 } = {}) {
+  // Returns true when the global _scanRunning flag flips back to false,
+  // or false on timeout. runScan/_doPoll already manage that flag.
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!_scanRunning) return true;
+    await new Promise(r => setTimeout(r, pollMs));
+  }
+  return false;
 }
 
 async function runScan() {
@@ -753,7 +813,7 @@ async function renderUltra() {
         <div class="admin-row">
           <button class="btn-admin"      id="adminSyncBtn"   title="Sync OHLCV from Massive into market_bars cache. Subsequent scans skip Massive.">⇣ Sync Market Data</button>
           <button class="btn-admin"      id="adminScanBtn"   title="Run a controlled scan (uses the cache). Same as Run Scan below.">⚡ Run Scan</button>
-          <button class="btn-admin btn-admin-disabled" id="adminGenBtn" disabled title="Generate dashboard-ready views (top_movers / best_setups / sector_heat). Lands in Phase E.">▦ Generate Views <span class="soon-tag">soon</span></button>
+          <button class="btn-admin" id="adminGenBtn" title="Generate dashboard-ready views (top_movers / best_setups / sector_heat / dashboard_summary) from the latest scan candidates. Writes to scan_generated_views.">▦ Generate Views</button>
           <button class="btn-admin btn-admin-pipe" id="adminPipeBtn" title="Sync → Scan in one click.">▶ Run Full Pipeline</button>
         </div>
         <div class="admin-row admin-token-row">
@@ -973,6 +1033,8 @@ async function renderUltra() {
   if (syncBtn) syncBtn.addEventListener("click", () => _adminSyncMarketData());
   const adminScanBtn = $("adminScanBtn");
   if (adminScanBtn) adminScanBtn.addEventListener("click", () => runScan());
+  const genBtn = $("adminGenBtn");
+  if (genBtn) genBtn.addEventListener("click", () => _adminGenerateViews());
   const pipeBtn = $("adminPipeBtn");
   if (pipeBtn) pipeBtn.addEventListener("click", () => _adminFullPipeline());
 

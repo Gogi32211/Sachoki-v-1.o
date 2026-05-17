@@ -101,6 +101,9 @@ ENDPOINTS: dict[str, Endpoint] = {
     # not block — better to give up the ack and let the UI poll.
     "admin_sync_market_data": Endpoint("admin_sync_market_data",
                                                           "scanner", "POST", "/api/admin/sync-market-data",          timeout=120, kind="ack"),
+    "admin_generate_views":   Endpoint("admin_generate_views",
+                                                          "scanner", "POST", "/api/admin/generate-views",            timeout=30,  kind="ack"),
+    "get_view":               Endpoint("get_view",        "scanner", "GET",  "/api/views",                           timeout=10),
 
     # ── Chart endpoints (hit Massive via scanner-api) ────────────────────────
     "chart_candles":       Endpoint("chart_candles",       "scanner", "GET",  "/api/chart/candles",                   timeout=15),

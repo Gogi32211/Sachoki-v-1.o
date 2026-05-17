@@ -699,6 +699,49 @@ async def admin_sync_market_data(request: Request,
     return data
 
 
+@app.post("/api/dashboard/admin/generate-views")
+async def admin_generate_views(request: Request,
+                                x_admin_token: str = Header(default="")):
+    """
+    Generate Views button (Phase D-1). Forwards x-admin-token to scanner-api,
+    which runs the generator module on the latest scan candidates and writes
+    4 view payloads (top_movers / best_setups / sector_heat / dashboard_summary)
+    into scan_generated_views.
+    """
+    body = await request.json() if request.headers.get("content-length") else {}
+    data, err = scanner.call(
+        "admin_generate_views",
+        body=body,
+        headers={"x-admin-token": x_admin_token},
+    )
+    if err is not None:
+        return _err_response(err)
+    data["source"] = "dashboard-bff"
+    return data
+
+
+@app.get("/api/dashboard/views/{view_type}")
+def dashboard_get_view(view_type: str, run_id: int | None = Query(default=None)):
+    """Read a single dashboard-ready view from scanner-api (via generator
+    cache table). Future Home/Dashboard pages should consume these instead
+    of computing top_movers/best_setups inline."""
+    params: dict = {}
+    if run_id is not None:
+        params["run_id"] = run_id
+    data, err = scanner.call("get_view", params=params)
+    if err is not None:
+        return _err_response(err)
+    # scanner.call hits /api/views (list) — filter to requested view_type
+    views = (data or {}).get("views", {})
+    return {
+        "ok":         views.get(view_type) is not None,
+        "view_type":  view_type,
+        "scan_run_id": data.get("scan_run_id"),
+        "payload":    views.get(view_type),
+        "source":     "dashboard-bff",
+    }
+
+
 @app.post("/api/dashboard/scans/ultra/run")
 async def scan_ultra_run(request: Request):
     """
