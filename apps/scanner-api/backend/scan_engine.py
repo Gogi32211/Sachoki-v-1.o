@@ -365,8 +365,19 @@ def run_controlled_scan(
             # Failures are non-fatal; we still produce a scored candidate.
             normalized_bars: list[dict] = []
             try:
-                from .engine_registry import run_engines as _run_engines
-                normalized_bars = _run_engines(ticker=sym, timeframe=timeframe, df=df)
+                from .engine_api import run_engines as _run_engines  # Phase B-1: engine_api boundary
+                # Phase B-1: engine_api is pure compute. Market-data
+                # concerns (split lifecycle) resolve here and pass in.
+                try:
+                    from .split_universe import get_split_flags_for_ticker
+                    _split_flags = get_split_flags_for_ticker(sym)
+                except Exception as exc:
+                    log.debug("split flag lookup failed for %s: %s", sym, exc)
+                    _split_flags = None
+                normalized_bars = _run_engines(
+                    ticker=sym, timeframe=timeframe, df=df,
+                    split_flags=_split_flags,
+                )
             except Exception as exc:
                 log.warning("engine_registry failed for %s: %s", sym, exc)
 
@@ -411,7 +422,7 @@ def run_controlled_scan(
                 candidate["bar_datetime"] = latest_bar.get("datetime")
             else:
                 # Engines couldn't run — empty signal slots, not silently absent.
-                from .unified_schema import (
+                from .engine_api import (
                     empty_signals, empty_scores, empty_roles, empty_split,
                 )
                 candidate["signals"]    = empty_signals()

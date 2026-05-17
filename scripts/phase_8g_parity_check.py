@@ -78,69 +78,69 @@ ENGINE_PAIRS = [
     {
         "name":   "signal_engine (T/Z)",
         "old":    ("signal_engine", "compute_signals"),
-        "new":    ("backend.chart_signal_engine", "compute_signals"),
+        "new":    ("backend.engine_api.chart_signal_engine", "compute_signals"),
         "compare_cols": ["bc", "zc", "sig_id", "sig_name"],
     },
     {
         "name":   "wlnbb",
         "old":    ("wlnbb_engine", "compute_wlnbb"),
-        "new":    ("backend.chart_wlnbb_engine", "compute_wlnbb"),
+        "new":    ("backend.engine_api.chart_wlnbb_engine", "compute_wlnbb"),
         "compare_cols": ["L34", "L43", "L64", "L22", "L555", "BLUE", "BO_UP", "BE_UP"],
     },
     {
         "name":   "vabs",
         "old":    ("vabs_engine", "compute_vabs"),
-        "new":    ("backend.chart_vabs_engine", "compute_vabs"),
+        "new":    ("backend.engine_api.chart_vabs_engine", "compute_vabs"),
         "compare_cols": ["abs_sig", "climb_sig", "load_sig", "ns", "nd", "sq", "bc", "vbo_up", "vbo_dn"],
     },
     {
         "name":   "wick",
         "old":    ("wick_engine", "compute_wick"),
-        "new":    ("backend.chart_wick_engine", "compute_wick"),
+        "new":    ("backend.engine_api.chart_wick_engine", "compute_wick"),
         "compare_cols": ["WICK_PATTERN", "WICK_BULL_PATTERN", "WICK_BEAR_PATTERN",
                          "WICK_BULL_CONFIRM", "WICK_BEAR_CONFIRM"],
     },
     {
         "name":   "combo",
         "old":    ("combo_engine", "compute_combo"),
-        "new":    ("backend.chart_combo_engine", "compute_combo"),
+        "new":    ("backend.engine_api.chart_combo_engine", "compute_combo"),
         "compare_cols": ["rocket", "buy_2809", "sig3g", "bb_brk", "atr_brk", "rtv",
                          "hilo_buy", "preup3", "preup2", "preup50", "preup89"],
     },
     {
         "name":   "f_engine",
         "old":    ("f_engine", "compute_f_signals"),
-        "new":    ("backend.chart_f_engine", "compute_f_signals"),
+        "new":    ("backend.engine_api.chart_f_engine", "compute_f_signals"),
         "compare_cols": ["f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "any_f"],
     },
     {
         "name":   "fly_engine",
         "old":    ("fly_engine", "compute_fly_series"),
-        "new":    ("backend.chart_fly_engine", "compute_fly_series"),
+        "new":    ("backend.engine_api.chart_fly_engine", "compute_fly_series"),
         "compare_cols": ["fly_abcd", "fly_cd", "fly_bd", "fly_ad"],
     },
     {
         "name":   "b_engine (B1–B11)",
         "old":    ("signal_engine", "compute_b_signals"),
-        "new":    ("backend.chart_b_engine", "compute_b_signals"),
+        "new":    ("backend.engine_api.chart_b_engine", "compute_b_signals"),
         "compare_cols": [f"b{i}" for i in range(1, 12)],
     },
     {
         "name":   "g_engine (G1/G2/G4/G6/G11)",
         "old":    ("signal_engine", "compute_g_signals"),
-        "new":    ("backend.chart_b_engine", "compute_g_signals"),
+        "new":    ("backend.engine_api.chart_b_engine", "compute_g_signals"),
         "compare_cols": ["g1", "g2", "g4", "g6", "g11"],
     },
     {
         "name":   "ultra_engine.compute_260308_l88",
         "old":    ("ultra_engine", "compute_260308_l88"),
-        "new":    ("backend.chart_ultra_engine", "compute_260308_l88"),
+        "new":    ("backend.engine_api.chart_ultra_engine", "compute_260308_l88"),
         "compare_cols": ["sig_260308", "sig_l88"],
     },
     {
         "name":   "ultra_engine.compute_ultra_v2",
         "old":    ("ultra_engine", "compute_ultra_v2"),
-        "new":    ("backend.chart_ultra_engine", "compute_ultra_v2"),
+        "new":    ("backend.engine_api.chart_ultra_engine", "compute_ultra_v2"),
         "compare_cols": ["eb_bull", "eb_bear", "fbo_bull", "fbo_bear",
                          "bf_buy", "bf_sell", "ultra_sq", "ultra_ns", "ultra_nd",
                          "ultra_3up", "ultra_3dn", "best_long", "best_short"],
@@ -160,13 +160,13 @@ def parity_gog(df: pd.DataFrame) -> dict:
     import ultra_engine  as old_ult
     import gog_engine    as old_gog
 
-    from backend.chart_signal_engine import compute_signals as new_sig
-    from backend.chart_wlnbb_engine  import compute_wlnbb   as new_wl
-    from backend.chart_vabs_engine   import compute_vabs    as new_vabs
-    from backend.chart_combo_engine  import compute_combo   as new_combo
-    from backend.chart_f_engine      import compute_f_signals as new_f
-    from backend.chart_ultra_engine  import compute_260308_l88, compute_ultra_v2
-    from backend.chart_gog_engine    import compute_gog_signals as new_gog
+    from backend.engine_api.chart_signal_engine import compute_signals as new_sig
+    from backend.engine_api.chart_wlnbb_engine  import compute_wlnbb   as new_wl
+    from backend.engine_api.chart_vabs_engine   import compute_vabs    as new_vabs
+    from backend.engine_api.chart_combo_engine  import compute_combo   as new_combo
+    from backend.engine_api.chart_f_engine      import compute_f_signals as new_f
+    from backend.engine_api.chart_ultra_engine  import compute_260308_l88, compute_ultra_v2
+    from backend.engine_api.chart_gog_engine    import compute_gog_signals as new_gog
 
     # Old pipeline
     old_sig_df = old_sig.compute_signals(df)

@@ -14,12 +14,15 @@ import numpy as np
 import pandas as pd
 
 from .scan_engine import fetch_bars
-from .chart_signal_engine import compute_signals as _compute_tz
-from .chart_wlnbb_engine import compute_wlnbb as _compute_wlnbb
-from .chart_vabs_engine import compute_vabs as _compute_vabs, VABS_SIG_COLS
-from .chart_wick_engine import compute_wick as _compute_wick, WICK_SIG_COLS
-from .chart_combo_engine import compute_combo as _compute_combo, COMBO_SIG_COLS, COMBO_PREUP_COLS
-from .engine_registry import run_engines as _run_engines
+# Phase B-1: engines moved into the engine_api subpackage. chart_engine is
+# part of the SCANNER layer (history/snapshot endpoints), not the engine
+# layer — so it imports from engine_api as a downstream consumer would.
+from .engine_api import run_engines as _run_engines
+from .engine_api.chart_signal_engine import compute_signals as _compute_tz
+from .engine_api.chart_wlnbb_engine  import compute_wlnbb   as _compute_wlnbb
+from .engine_api.chart_vabs_engine   import compute_vabs    as _compute_vabs, VABS_SIG_COLS
+from .engine_api.chart_wick_engine   import compute_wick    as _compute_wick, WICK_SIG_COLS
+from .engine_api.chart_combo_engine  import compute_combo   as _compute_combo, COMBO_SIG_COLS, COMBO_PREUP_COLS
 
 log = logging.getLogger(__name__)
 
@@ -355,7 +358,15 @@ def get_chart_history(symbol: str, tf: str = "1d", lookback: int = 60) -> dict:
                      "warning": f"no data returned for {sym} ({tf})"},
         }
 
-    all_bars = _run_engines(ticker=sym, timeframe=tf, df=df)
+    # Phase B-1: engine_api is pure compute. Resolve split flags here
+    # (market-data concern) and pass into run_engines.
+    try:
+        from .split_universe import get_split_flags_for_ticker
+        _split_flags = get_split_flags_for_ticker(sym)
+    except Exception as exc:
+        log.debug("split flag lookup failed for %s: %s", sym, exc)
+        _split_flags = None
+    all_bars = _run_engines(ticker=sym, timeframe=tf, df=df, split_flags=_split_flags)
     if not all_bars:
         return {
             "ok": False, "ticker": sym, "timeframe": tf, "lookback": bars,

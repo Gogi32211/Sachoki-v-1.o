@@ -121,6 +121,7 @@ def run_engines(
     ticker: str,
     timeframe: str,
     df: pd.DataFrame,
+    split_flags: dict | None = None,
 ) -> list[dict[str, Any]]:
     """
     Run the full registered engine pipeline on a single ticker's OHLCV.
@@ -163,8 +164,12 @@ def run_engines(
     gog_df = _run_gog(idf, tz_df, wl_df, f_df, vabs_df, u260_df, uv2_df, combo_df,
                      engines_ran, engines_failed)
 
-    # 2b. Split / reverse-split flags (per-ticker, same on every bar).
-    split_flags = _resolve_split_flags(ticker, engines_ran, engines_failed)
+    # 2b. Split / reverse-split flags arrive as a parameter — engine_api
+    # is pure compute and must not import from the market-data layer
+    # (which is where split_universe lives). scan_engine resolves the
+    # flags from split_universe before calling run_engines.
+    if split_flags is not None:
+        engines_ran.append("split")
 
     routing = _build_routing()
 
@@ -452,20 +457,18 @@ def _run_wick(idf, ran, failed):
         return None
 
 
-def _resolve_split_flags(ticker, ran, failed):
+def _resolve_split_flags_DEPRECATED(ticker, ran, failed):
     """
-    Look up reverse-split lifecycle flags for the ticker. Network failure
-    inside split_service returns a clean empty-split dict — never raises.
+    DEPRECATED — Phase B-1 architectural fix.
+    Split lookup is a market-data concern. engine_api stays pure compute.
+    Split flags are now passed in via run_engines(..., split_flags=...).
+    Caller (scan_engine) resolves them from split_universe.
+
+    Kept as a stub so old call sites surface a clear error if any remain.
     """
-    try:
-        from .split_universe import get_split_flags_for_ticker
-        out = get_split_flags_for_ticker(ticker)
-        ran.append("split")
-        return out
-    except Exception as exc:
-        log.warning("split lookup failed for %s: %s", ticker, exc)
-        failed.append("split")
-        return None
+    log.warning("_resolve_split_flags is deprecated — pass split_flags to run_engines()")
+    failed.append("split")
+    return None
 
 
 def _run_combo(idf, ran, failed):

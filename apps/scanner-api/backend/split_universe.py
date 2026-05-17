@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, date as date_t
 from typing import Dict, List, Optional, Tuple
 
-from .unified_schema import empty_split
+from .engine_api import empty_split  # Phase B-1: engine_api boundary
 
 log = logging.getLogger(__name__)
 
