@@ -1172,50 +1172,15 @@ async function renderUltra() {
         <div class="card"><div class="c-label">Finished</div><div class="c-value" style="font-size:.72rem;padding-top:4px">${fmtDate(scan.finished_at)}</div></div>
       </div>
 
-      <div class="section-label">Ultra Scan Controls</div>
-      <div class="scan-controls-card" id="scanControls">
-        <div class="scan-safety-row">
-          <span class="safety-chip">Scheduler Disabled</span>
-          <span class="safety-chip">Full-market Disabled</span>
-          <span class="safety-chip safety-provider">Provider: Massive</span>
+      <div class="ultra-scan-cta">
+        <div class="ultra-cta-text">
+          <b>Scan controls live in System →</b>
+          all scan / sync / generate operations are managed from the System page now,
+          with rich progress, elapsed time, ETA and Stop button.
         </div>
-        <div class="scan-form-row">
-          <label class="scan-label">Universe
-            <select id="scUniverse" title="Which symbol pool to draw from. Sample lists = 100 curated tickers. Split Universe = full NASDAQ reverse-split history, usually 500–2000+ tickers. Pick this for a real big scan.">
-              <option value="sp500_sample">S&amp;P 500 Sample (~100)</option>
-              <option value="nasdaq_sample">NASDAQ Sample (~100)</option>
-              <option value="split_universe">Split Universe (500–2000+)</option>
-              <option value="manual_default">Manual List</option>
-            </select>
-          </label>
-          <label class="scan-label">Symbols
-            <select id="scCount" title="How many tickers to take from the chosen universe. MAX = entire universe (size depends on which one you picked). SCANNER_MAX_SYMBOLS=0 = no upstream cap.">
-              <option value="10">10</option>
-              <option value="25">25</option>
-              <option value="50">50</option>
-              <option value="100">100 (max for sample lists)</option>
-              <option value="250">250</option>
-              <option value="500">500</option>
-              <option value="1000">1000</option>
-              <option value="2000">2000</option>
-              <option value="0" selected>MAX (entire universe)</option>
-            </select>
-          </label>
-          <label class="scan-label">Scoring
-            <select id="scMode">
-              <option value="real" selected>Real</option>
-              <option value="compare">Compare</option>
-            </select>
-          </label>
-          <label class="scan-label scan-label-check">
-            <input type="checkbox" id="scReplace" checked /> Replace latest
-          </label>
-          <button class="btn-run"    id="scRunBtn"    onclick="runScan()">⚡ Run Scan</button>
-          <button class="btn-cancel" id="scCancelBtn" onclick="cancelScan()" disabled>✕ Cancel</button>
+        <div class="ultra-cta-actions">
+          <a class="btn-run" href="#system">⚡ Open System → Run Scan</a>
           <button class="btn-refresh-scan" onclick="ensureBootstrap(true).then(onScanComplete)">↻ Refresh Latest</button>
-        </div>
-        <div class="scan-progress-wrap" id="scProgressWrap" style="display:none">
-          <div id="scProgress"></div>
         </div>
       </div>
 
@@ -1370,15 +1335,8 @@ async function renderUltra() {
   const dbgBtn = $("debugPanelBtn");
   if (dbgBtn) dbgBtn.addEventListener("click", _toggleUltraDebug);
 
-  // Restore running state if scan was in progress before navigation
-  if (_scanRunning) {
-    _setProgressVisible(true);
-    _setScanBtns(true);
-    if (_scanRunId) _startPolling(_scanRunId);
-  }
-
-  // Load sample list sizes in background (non-blocking)
-  loadSampleListsAndInit();
+  // Scan controls moved to System page. No need to restore polling state
+  // or load sample-list sizes here — System owns the runner UI now.
 }
 
 function applyUltraFilters() {

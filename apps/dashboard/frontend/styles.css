@@ -1509,6 +1509,24 @@ tbody tr:last-child td { border-bottom: none; }
   .sidebar-pulse { display: none; }
 }
 
+/* ── Ultra Scanner: CTA card (scan controls moved to System) ─────────────── */
+.ultra-scan-cta {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 20px; flex-wrap: wrap;
+  background: linear-gradient(180deg, var(--surface), var(--bg-elevated));
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  margin: 16px 0 4px;
+}
+.ultra-cta-text  { font-size: .82rem; color: var(--tx); line-height: 1.5; max-width: 720px; }
+.ultra-cta-text b { color: var(--tx-hi); }
+.ultra-cta-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.ultra-cta-actions .btn-run {
+  text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+}
+
 /* ── Utility helpers ──────────────────────────────────────────────────────── */
 .pos { color: var(--pos); }
 .neg { color: var(--neg); }
