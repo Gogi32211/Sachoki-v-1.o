@@ -25,6 +25,17 @@ function bandClass(b) {
   return "";
 }
 
+// Returns a CSS color value based on numeric score magnitude (0–100 scale).
+function _scoreGradeColor(score) {
+  const n = Number(score);
+  if (!isFinite(n)) return "var(--tx-dim)";
+  if (n >= 80) return "var(--grade-ap)";
+  if (n >= 60) return "var(--grade-a)";
+  if (n >= 40) return "var(--grade-b)";
+  if (n >= 20) return "var(--grade-c)";
+  return "var(--grade-d)";
+}
+
 // ── Error banner ──────────────────────────────────────────────────────────────
 function showError(msg) {
   const el = $("errorBanner");
@@ -112,7 +123,7 @@ async function navigate() {
   _page = newPage;
   setNavActive(_page);
   document.title = `Sachoki · ${_page.charAt(0).toUpperCase() + _page.slice(1)}`;
-  $r().innerHTML = `<div class="page-loading">Loading…</div>`;
+  $r().innerHTML = `<div class="page-loading"><div class="loading-pulse"></div><div class="loading-text">Loading…</div></div>`;
 
   try {
     await RENDERERS[_page]();
@@ -188,17 +199,63 @@ async function renderHome() {
     { page: "system",    icon: "⚙", label: "System",        sub: "Health & config" },
   ];
 
+  // Build best setups preview (top 3)
+  const bestSetups = (data.best_setups ?? []).slice(0, 3);
+  const bestSetupsHtml = bestSetups.length
+    ? bestSetups.map(s => {
+        const chg    = s.change_pct;
+        const chgStr = chg != null ? (chg >= 0 ? "+" : "") + fmt(chg, 2) + "%" : null;
+        const chgCls = chg != null && chg >= 0 ? "pos" : "neg";
+        const scoreColor = _scoreGradeColor(s.ultra_score);
+        return `<div class="setup-preview-card">
+          <div class="spc-sym">
+            ${esc(s.symbol)}
+            <button class="btn-chart" onclick="openChart('${esc(s.symbol)}')" title="Open in Superchart">◈</button>
+          </div>
+          <div class="spc-sector">${esc(s.sector || "—")}${s.industry ? ` · ${esc(s.industry)}` : ""}</div>
+          <div class="spc-score-row">
+            <span class="spc-score-num" style="color:${scoreColor}">${s.ultra_score ?? "—"}</span>
+            <span class="chip ${bandClass(s.band)}">${esc(s.band || "—")}</span>
+            ${chgStr ? `<span class="spc-chg ${chgCls}">${chgStr}</span>` : ""}
+          </div>
+        </div>`;
+      }).join("")
+    : `<div class="empty-state">
+        <div class="es-icon">◎</div>
+        <div class="es-title">No setups yet</div>
+        <div class="es-body">Run a scan and generate views to populate best setups.</div>
+        <a class="es-action" href="#system">Go to Admin</a>
+      </div>`;
+
   $r().innerHTML = `
     <div class="page-container">
+      <div class="page-header">
+        <div class="ph-title">Command Center</div>
+        <div class="ph-meta">Run #${esc(String(scan.scan_run_id ?? "—"))} · ${esc(scan.universe ?? "—")} · ${esc(scan.timeframe ?? "—")} · ${fmtDate(scan.finished_at)}</div>
+      </div>
       <div class="state-banner ${bannerCls}">${esc(bannerMsg)} ${sourceTag}</div>
-      <div class="section-label">Scan Summary</div>
-      <div class="cards-row">
-        <div class="card"><div class="c-label">Candidates</div><div class="c-value">${sum.total_candidates ?? "—"}</div><div class="c-sub">total returned</div></div>
-        <div class="card"><div class="c-label">Top Score</div><div class="c-value" style="color:var(--green)">${sum.top_score ?? "—"}</div><div class="c-sub">ultra score</div></div>
-        <div class="card"><div class="c-label">Run ID</div><div class="c-value" style="font-size:1.1rem">${scan.scan_run_id ?? "—"}</div><div class="c-sub">${esc(scan.source ?? "scanner-api")}</div></div>
-        <div class="card"><div class="c-label">Bands</div><div class="c-value">${Object.keys(sum.bands ?? {}).length}</div><div class="c-sub">active</div></div>
-        <div class="card"><div class="c-label">Sectors</div><div class="c-value">${Object.keys(sum.sectors ?? {}).length}</div><div class="c-sub">covered</div></div>
-        <div class="card"><div class="c-label">Universe</div><div class="c-value" style="font-size:.9rem;padding-top:4px">${esc(scan.universe ?? "—")}</div><div class="c-sub">${esc(scan.timeframe ?? "—")}</div></div>
+      <div class="section-label">Scan Health</div>
+      <div class="scan-health-strip">
+        <div class="stat-tile">
+          <div class="st-label">Candidates</div>
+          <div class="st-value">${sum.total_candidates ?? "—"}</div>
+          <div class="st-sub">total returned</div>
+        </div>
+        <div class="stat-tile">
+          <div class="st-label">Top Score</div>
+          <div class="st-value" style="color:var(--grade-ap)">${sum.top_score ?? "—"}</div>
+          <div class="st-sub">best ultra score</div>
+        </div>
+        <div class="stat-tile">
+          <div class="st-label">Universe</div>
+          <div class="st-value" style="font-size:1rem;padding-top:4px">${esc(scan.universe ?? "—")}</div>
+          <div class="st-sub">${esc(scan.timeframe ?? "—")}</div>
+        </div>
+        <div class="stat-tile">
+          <div class="st-label">Bands</div>
+          <div class="st-value">${Object.keys(sum.bands ?? {}).length}</div>
+          <div class="st-sub">${Object.keys(sum.sectors ?? {}).length} sectors</div>
+        </div>
       </div>
       <div class="section-label">Quick Access</div>
       <div class="quick-grid">
@@ -209,21 +266,29 @@ async function renderHome() {
             <span class="quick-sub">${q.sub}</span>
           </a>`).join("")}
       </div>
+      <div class="section-label">Best Setups Preview</div>
+      <div class="setups-preview-row">${bestSetupsHtml}</div>
       <div class="section-label">Service Status</div>
       <div class="cards-row">
-        <div class="card"><div class="c-label">Scanner API</div><div class="c-value" style="font-size:1rem"><span class="pill ${reach ? "ok" : "err"}">${reach ? "reachable" : "unreachable"}</span></div></div>
-        <div class="card"><div class="c-label">Last Scan</div><div class="c-value" style="font-size:.8rem;line-height:1.4">${fmtDate(scan.finished_at)}</div></div>
-        <div class="card"><div class="c-label">Status</div><div class="c-value" style="font-size:1rem">${esc(scan.status ?? "—")}</div></div>
+        <div class="card"><div class="c-label">Scanner API</div><div class="c-value" style="font-size:.9rem"><span class="pill ${reach ? "ok" : "err"}">${reach ? "reachable" : "unreachable"}</span></div></div>
+        <div class="card"><div class="c-label">Last Scan</div><div class="c-value" style="font-size:.75rem;line-height:1.4">${fmtDate(scan.finished_at)}</div></div>
+        <div class="card"><div class="c-label">Status</div><div class="c-value" style="font-size:.9rem">${esc(scan.status ?? "—")}</div></div>
       </div>
     </div>`;
 }
 
 function homeError() {
   return `<div class="page-container">
+    <div class="page-header">
+      <div class="ph-title">Command Center</div>
+      <div class="ph-meta">Bootstrap failed</div>
+    </div>
     <div class="state-banner error">Dashboard bootstrap failed — scanner-api may be unreachable.</div>
-    <div class="section-label">Quick Access</div>
-    <div class="quick-grid">
-      <a class="quick-card" href="#system"><span class="quick-icon">⚙</span><span class="quick-label">System</span><span class="quick-sub">Check health</span></a>
+    <div class="empty-state">
+      <div class="es-icon">⚙</div>
+      <div class="es-title">Unable to load scan data</div>
+      <div class="es-body">Check scanner-api health and ensure the service is reachable.</div>
+      <a class="es-action" href="#system">Go to System</a>
     </div>
   </div>`;
 }
@@ -239,15 +304,19 @@ async function renderDashboard() {
 
   $r().innerHTML = `
     <div class="page-container">
+      <div class="page-header">
+        <div class="ph-title">Market Intelligence</div>
+        <div class="ph-meta">Top movers, best setups, and distribution breakdown</div>
+      </div>
       <div class="section-label">Top Movers</div>
       <div class="movers-row">
         <div class="movers-box">
           <div class="m-title gain-title">Top Gainers</div>
-          <div>${renderMoversList(movers.gainers ?? [])}</div>
+          <div>${renderMoversList(movers.gainers ?? [], true)}</div>
         </div>
         <div class="movers-box">
           <div class="m-title loss-title">Top Losers</div>
-          <div>${renderMoversList(movers.losers ?? [])}</div>
+          <div>${renderMoversList(movers.losers ?? [], false)}</div>
         </div>
       </div>
       <div class="section-label">Best Setups</div>
@@ -255,7 +324,7 @@ async function renderDashboard() {
       <div class="section-label">Distribution</div>
       <div class="dist-row">
         <div class="dist-box">
-          <div class="d-title">Bands</div>
+          <div class="d-title">Score Bands</div>
           <div>${renderBars(Object.entries(sum.bands ?? {}).sort((a,b)=>b[1]-a[1]), l => `band-${l === "A+" ? "Ap" : l}`)}</div>
         </div>
         <div class="dist-box">
@@ -266,7 +335,7 @@ async function renderDashboard() {
     </div>`;
 }
 
-function renderMoversList(movers) {
+function renderMoversList(movers, _isGainer) {
   if (!movers?.length) return `<div class="mover-empty">No change_pct data available.</div>`;
   return movers.map((m, i) => {
     const chg    = m.change_pct;
@@ -279,29 +348,36 @@ function renderMoversList(movers) {
       <span class="mover-chg ${chgCls}">${chgStr}</span>
       <span class="mover-score">${m.ultra_score ?? "—"}</span>
       <span class="chip ${bandClass(m.band)}">${esc(m.band || "—")}</span>
+      <button class="btn-chart" onclick="openChart('${esc(m.symbol)}')" title="Open in Superchart">◈</button>
     </div>`;
   }).join("");
 }
 
 function renderSetups(setups) {
-  if (!setups?.length) return `<span style="color:var(--text-dim);font-size:.82rem">No best setups found for current scan.</span>`;
+  if (!setups?.length) return `<div class="empty-state">
+    <div class="es-icon">◎</div>
+    <div class="es-title">No setups found</div>
+    <div class="es-body">Run a scan and generate views to populate best setups.</div>
+    <a class="es-action" href="#system">Go to Admin</a>
+  </div>`;
   return setups.map(s => {
-    const reasons   = (s.setup_reason ?? s.why_selected ?? []).slice(0, 4).map(w => `<li>${esc(w)}</li>`).join("");
+    const reasons   = (s.setup_reason ?? s.why_selected ?? []).slice(0, 3).map(w => `<li>${esc(w)}</li>`).join("");
     const riskChips = (s.risk_flags ?? []).slice(0, 2).map(r => `<span class="chip risk">${esc(r)}</span>`).join("");
     const chg    = s.change_pct;
     const chgStr = chg != null ? (chg >= 0 ? "+" : "") + fmt(chg, 2) + "%" : null;
     const chgCls = chg != null && chg >= 0 ? "pos" : "neg";
+    const scoreColor = _scoreGradeColor(s.ultra_score);
     return `<div class="setup-card">
       <div class="s-sym">
         ${esc(s.symbol)}
-        <button class="btn-chart" onclick="openChart('${esc(s.symbol)}')" title="Open in Superchart" style="margin-left:6px">◈</button>
+        <button class="btn-chart" onclick="openChart('${esc(s.symbol)}')" title="Open in Superchart">◈</button>
       </div>
       <div class="s-sector">${esc(s.sector || "—")}${s.industry ? ` · ${esc(s.industry)}` : ""}</div>
       <div class="score-row">
-        <span class="score-num">${s.ultra_score ?? "—"}</span>
+        <span class="score-num" style="color:${scoreColor}">${s.ultra_score ?? "—"}</span>
         <span class="chip ${bandClass(s.band)}">${esc(s.band || "—")}</span>
         ${s.final_signal ? `<span class="chip signal">${esc(s.final_signal)}</span>` : ""}
-        ${chgStr ? `<span class="td-chg ${chgCls}" style="font-size:.75rem;margin-left:4px">${chgStr}</span>` : ""}
+        ${chgStr ? `<span class="td-chg ${chgCls}" style="font-size:.78rem">${chgStr}</span>` : ""}
       </div>
       ${riskChips ? `<div style="margin-bottom:4px">${riskChips}</div>` : ""}
       <ul class="why-list">${reasons}</ul>
@@ -1060,14 +1136,18 @@ async function renderUltra() {
 
   $r().innerHTML = `
     <div class="page-container">
+      <div class="page-header">
+        <div class="ph-title">Ultra Scanner</div>
+        <div class="ph-meta">Scan candidates, filters, and signal breakdown · Run #${esc(String(scan.scan_run_id ?? "—"))}</div>
+      </div>
       <div class="section-label">Latest Scan</div>
       <div class="cards-row">
-        <div class="card"><div class="c-label">Run ID</div><div class="c-value" style="font-size:1.1rem">${scan.scan_run_id ?? "—"}</div></div>
+        <div class="card"><div class="c-label">Run ID</div><div class="c-value" style="font-size:1rem">${scan.scan_run_id ?? "—"}</div></div>
         <div class="card"><div class="c-label">Universe</div><div class="c-value" style="font-size:.9rem;padding-top:4px">${esc(scan.universe ?? "—")}</div></div>
         <div class="card"><div class="c-label">Timeframe</div><div class="c-value">${esc(scan.timeframe ?? "—")}</div></div>
         <div class="card"><div class="c-label">Candidates</div><div class="c-value">${scan.total_candidates ?? "—"}</div></div>
-        <div class="card"><div class="c-label">Status</div><div class="c-value" style="font-size:.9rem">${esc(scan.status ?? "—")}</div></div>
-        <div class="card"><div class="c-label">Finished</div><div class="c-value" style="font-size:.7rem;padding-top:4px">${fmtDate(scan.finished_at)}</div></div>
+        <div class="card"><div class="c-label">Status</div><div class="c-value" style="font-size:.85rem">${esc(scan.status ?? "—")}</div></div>
+        <div class="card"><div class="c-label">Finished</div><div class="c-value" style="font-size:.72rem;padding-top:4px">${fmtDate(scan.finished_at)}</div></div>
       </div>
 
       <div class="section-label">Ultra Scan Controls</div>
@@ -2005,16 +2085,19 @@ function _buildChartMeta(data, candleCount) {
 async function renderResearch() {
   $r().innerHTML = `
     <div class="page-container">
-      <div class="section-label">Research</div>
-      <div class="placeholder-box" style="min-height:200px">
-        <span class="placeholder-icon">◎</span>
-        <span class="placeholder-text">Research — Phase 8D / 8F</span>
-        <span class="placeholder-sub">Replay, statistics, and signal history migration planned for a later phase.</span>
+      <div class="page-header">
+        <div class="ph-title">Research</div>
+        <div class="ph-meta">Replay, statistics, and signal history — planned for a later phase</div>
+      </div>
+      <div class="empty-state" style="min-height:200px">
+        <div class="es-icon">◎</div>
+        <div class="es-title">Coming soon</div>
+        <div class="es-body">Research — Phase 8D / 8F. Replay, statistics, and signal history migration planned for a later phase.</div>
       </div>
       <div class="section-label">Research API</div>
       <div class="cards-row">
-        <div class="card"><div class="c-label">Research API</div><div class="c-value" style="font-size:.9rem;color:var(--text-dim)">Not configured</div><div class="c-sub">RESEARCH_API_URL not set</div></div>
-        <div class="card"><div class="c-label">Planned</div><div class="c-value" style="font-size:.72rem;line-height:1.5;padding-top:4px;color:var(--text-dim)">Replay · Statistics · Signal history</div></div>
+        <div class="card"><div class="c-label">Research API</div><div class="c-value" style="font-size:.85rem;color:var(--tx-dim)">Not configured</div><div class="c-sub">RESEARCH_API_URL not set</div></div>
+        <div class="card"><div class="c-label">Planned</div><div class="c-value" style="font-size:.7rem;line-height:1.5;padding-top:4px;color:var(--tx-dim)">Replay · Statistics · Signal history</div></div>
       </div>
     </div>`;
 }
@@ -2023,7 +2106,7 @@ async function renderResearch() {
 // PAGE: SYSTEM
 // ═════════════════════════════════════════════════════════════════════════════
 async function renderSystem() {
-  $r().innerHTML = `<div class="page-container"><div class="page-loading">Loading system status…</div></div>`;
+  $r().innerHTML = `<div class="page-container"><div class="page-loading"><div class="loading-pulse"></div><div class="loading-text">Loading system status…</div></div></div>`;
 
   let status;
   try {
@@ -2038,6 +2121,10 @@ async function renderSystem() {
 
   $r().innerHTML = `
     <div class="page-container">
+      <div class="page-header">
+        <div class="ph-title">System</div>
+        <div class="ph-meta">Service health, admin controls, and pipeline management</div>
+      </div>
 
       <div class="section-label">Admin Control Center</div>
       <div class="admin-card" id="adminControls">
