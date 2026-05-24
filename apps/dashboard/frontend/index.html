@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sachoki</title>
+  <!-- Design system: tokens MUST come first so styles.css + signal-badges.css can read them -->
+  <link rel="stylesheet" href="/static/design-tokens.css" />
+  <link rel="stylesheet" href="/static/signal-badges.css" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+  <!-- ── Command bar ── -->
+  <header class="cmdbar">
+    <button id="sidebarToggleBtn" class="btn-sidebar-toggle" title="Toggle sidebar (Ctrl+B)" aria-label="Toggle sidebar">
+      <span class="sb-tog-icon">☰</span>
+    </button>
+    <span class="cmdbar-brand">Sachoki</span>
+    <span class="cmdbar-sep"></span>
+    <span class="cmdbar-phase">beta</span>
+    <div class="cmdbar-meta" id="cmdMeta">
+      <span id="cmScanner">Scanner: —</span>
+    </div>
+    <span class="spacer"></span>
+    <button id="refreshBtn" class="btn-refresh">⟳ Refresh</button>
+  </header>
+
+  <!-- ── Error banner ── -->
+  <div id="errorBanner" class="error-banner" style="display:none"></div>
+
+  <!-- ── App shell ── -->
+  <div class="app-shell">
+
+    <!-- Sidebar nav -->
+    <nav class="sidebar">
+      <div class="sidebar-brand">
+        <div class="sidebar-brand-name">Sachoki</div>
+        <div class="sidebar-brand-sub">beta</div>
+      </div>
+      <ul class="nav-list">
+        <li class="nav-group-label">Data</li>
+        <li><a class="nav-item" href="#home"     data-page="home">
+          <span class="nav-icon">⌂</span><span class="nav-label">Home</span>
+        </a></li>
+        <li><a class="nav-item" href="#dashboard" data-page="dashboard">
+          <span class="nav-icon">▦</span><span class="nav-label">Dashboard</span>
+        </a></li>
+        <li><a class="nav-item" href="#ultra"    data-page="ultra">
+          <span class="nav-icon">⚡</span><span class="nav-label">Ultra Scanner</span>
+        </a></li>
+        <li class="nav-sep"></li>
+        <li class="nav-group-label">Inspect</li>
+        <li><a class="nav-item" href="#chart"    data-page="chart">
+          <span class="nav-icon">◈</span><span class="nav-label">Superchart</span>
+        </a></li>
+        <li class="nav-sep"></li>
+        <li class="nav-group-label">Tools</li>
+        <li><a class="nav-item" href="#research" data-page="research">
+          <span class="nav-icon">◎</span><span class="nav-label">Research</span>
+        </a></li>
+        <li><a class="nav-item" href="#system"   data-page="system">
+          <span class="nav-icon">⚙</span><span class="nav-label">System</span>
+        </a></li>
+      </ul>
+      <div class="sidebar-pulse">
+        <div class="sidebar-pulse-dot"></div>
+        <span class="sidebar-pulse-label">connected</span>
+      </div>
+    </nav>
+
+    <!-- Page content area -->
+    <main class="page-root" id="pageRoot">
+      <div class="page-loading">
+        <div class="loading-pulse"></div>
+        <div class="loading-text">Loading…</div>
+      </div>
+    </main>
+
+  </div>
+
+  <!-- lightweight-charts v4 (TradingView) — loaded before app.js -->
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <!-- Design system: badge resolver MUST load before app.js so renderers can call it -->
+  <script src="/static/signal-badges.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
